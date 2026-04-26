@@ -1,0 +1,6 @@
+.DS_Store
+.env
+.next
+.plans
+.playwright-mcp
+node_modules

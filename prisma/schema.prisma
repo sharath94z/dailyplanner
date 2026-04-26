@@ -1,0 +1,272 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  email               String               @unique
+  name                String?
+  timezone            String               @default("Asia/Tokyo")
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  calendarConnections CalendarConnection[]
+  calendarEvents      CalendarEvent[]
+  routines            Routine[]
+  schedulingRuns      SchedulingRun[]
+  tasks               Task[]
+  taskHistory         TaskHistory[]
+  taskSchedules       TaskSchedule[]
+  taskSuggestions     TaskSuggestion[]
+  preferences         UserPreferences?
+
+  @@index([createdAt])
+}
+
+model UserPreferences {
+  id                      String   @id @default(cuid())
+  userId                  String   @unique
+  workDayStart            String   @default("09:00")
+  workDayEnd              String   @default("18:00")
+  sleepStart              String?  @default("23:00")
+  sleepEnd                String?  @default("07:00")
+  defaultTaskDuration     Int      @default(30)
+  maxDailyPlannedMinutes  Int      @default(360)
+  autoSuggestOnTaskCreate Boolean  @default(true)
+  suggestionLimit         Int      @default(5)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Task {
+  id              String           @id @default(cuid())
+  userId          String
+  title           String
+  notes           String?
+  status          TaskStatus       @default(UNSCHEDULED)
+  priority        Priority         @default(MEDIUM)
+  deadline        DateTime?
+  durationMinutes Int?
+  estimatedByAI   Boolean          @default(false)
+  effortLevel     EffortLevel      @default(MEDIUM)
+  taskType        TaskType         @default(GENERIC)
+  splittable      Boolean          @default(false)
+  source          String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  history         TaskHistory[]
+  schedules       TaskSchedule[]
+  suggestions     TaskSuggestion[]
+
+  @@index([userId, status])
+  @@index([userId, priority])
+  @@index([userId, deadline])
+  @@index([userId, createdAt])
+}
+
+model TaskSchedule {
+  id               String           @id @default(cuid())
+  taskId           String
+  userId           String
+  startAt          DateTime
+  endAt            DateTime
+  date             DateTime
+  isLocked         Boolean          @default(false)
+  completionStatus CompletionStatus @default(PENDING)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  task             Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([userId, startAt, endAt])
+  @@index([taskId])
+}
+
+model TaskSuggestion {
+  id            String           @id @default(cuid())
+  taskId        String
+  userId        String
+  startAt       DateTime
+  endAt         DateTime
+  date          DateTime
+  rank          Int?
+  score         Float?
+  status        SuggestionStatus @default(ACTIVE)
+  reasonSummary Json?
+  generatedAt   DateTime         @default(now())
+  expiresAt     DateTime?
+  task          Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date, status])
+  @@index([taskId, status])
+  @@index([generatedAt])
+}
+
+model Routine {
+  id                  String   @id @default(cuid())
+  userId              String
+  title               String
+  durationMinutes     Int
+  rrule               String
+  preferredTimeWindow String?
+  isEnabled           Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isEnabled])
+}
+
+model CalendarConnection {
+  id                    String           @id @default(cuid())
+  userId                String
+  provider              CalendarProvider @default(GOOGLE)
+  providerAccountId     String
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String?
+  syncStatus            SyncStatus       @default(ACTIVE)
+  lastSyncedAt          DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId, syncStatus])
+}
+
+model CalendarEvent {
+  id           String           @id @default(cuid())
+  userId       String
+  externalId   String
+  provider     CalendarProvider @default(GOOGLE)
+  title        String
+  startAt      DateTime
+  endAt        DateTime
+  isAllDay     Boolean          @default(false)
+  busyStatus   String?
+  lastSyncedAt DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, externalId])
+  @@index([userId, startAt, endAt])
+}
+
+model SchedulingRun {
+  id             String                @id @default(cuid())
+  userId         String
+  triggerType    SchedulingTriggerType
+  dateRangeStart DateTime
+  dateRangeEnd   DateTime
+  status         SchedulingRunStatus   @default(SUCCESS)
+  summary        Json?
+  createdAt      DateTime              @default(now())
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([triggerType, createdAt])
+}
+
+model TaskHistory {
+  id        String               @id @default(cuid())
+  taskId    String
+  userId    String
+  eventType TaskHistoryEventType
+  metadata  Json?
+  createdAt DateTime             @default(now())
+  task      Task                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@index([userId, eventType, createdAt])
+}
+
+enum TaskStatus {
+  UNSCHEDULED
+  SUGGESTED
+  SCHEDULED
+  COMPLETED
+  MISSED
+  ARCHIVED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum EffortLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskType {
+  DEEP_WORK
+  ADMIN
+  ROUTINE
+  ERRAND
+  GENERIC
+}
+
+enum SuggestionStatus {
+  ACTIVE
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+  REPLACED
+}
+
+enum CompletionStatus {
+  PENDING
+  COMPLETED
+  MISSED
+}
+
+enum CalendarProvider {
+  GOOGLE
+}
+
+enum SyncStatus {
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+enum SchedulingTriggerType {
+  PLAN_DAY
+  TASK_CREATED
+  REFRESH
+  MISSED_TASK_REPLAN
+}
+
+enum SchedulingRunStatus {
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum TaskHistoryEventType {
+  CREATED
+  UPDATED
+  SUGGESTED
+  SUGGESTION_ACCEPTED
+  SUGGESTION_DISMISSED
+  SUGGESTION_RETRIED
+  SCHEDULED
+  MOVED
+  COMPLETED
+  MISSED
+  REPLANNED
+  ARCHIVED
+}
