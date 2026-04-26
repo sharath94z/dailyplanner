@@ -4,3 +4,4 @@
 .plans
 .playwright-mcp
 node_modules
+tsconfig.tsbuildinfo

@@ -14,6 +14,13 @@ import {
 
 import { AppError } from "../../lib/api-errors";
 import { prisma } from "../../lib/db";
+import {
+  getDateStringForInstantInTimeZone,
+  getDayWindowForDate,
+  getTodayDateStringInTimeZone,
+  getUtcInstantForLocalTime
+} from "../../lib/planner-time";
+import { getUserTimeZone } from "../../lib/user-timezone";
 import type { PlanDayInput } from "../../lib/validators/suggestions";
 
 const DEFAULT_WORKDAY_START = "09:00";
@@ -102,6 +109,8 @@ type EligibleTask = {
 };
 
 type SchedulerDayData = {
+  date: string;
+  timeZone: string;
   preferences: SchedulerPreferences;
   dayStart: Date;
   dayEnd: Date;
@@ -109,25 +118,6 @@ type SchedulerDayData = {
   availabilityEnd: Date;
   occupiedBlocks: OccupiedBlock[];
 };
-
-function getTodayDateString(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "UTC",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(new Date());
-}
-
-function parseDateStart(date: string): Date {
-  return new Date(`${date}T00:00:00.000Z`);
-}
-
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
 
 function parseTimeParts(value: string, fallback: string): { hours: number; minutes: number } {
   const match = /^(\d{2}):(\d{2})$/.exec(value);
@@ -150,11 +140,17 @@ function parseTimeParts(value: string, fallback: string): { hours: number; minut
   return { hours, minutes };
 }
 
-function setUtcTime(baseDate: Date, time: string, fallback: string): Date {
-  const { hours, minutes } = parseTimeParts(time, fallback);
-  const next = new Date(baseDate);
-  next.setUTCHours(hours, minutes, 0, 0);
-  return next;
+function normalizeTimeValue(value: string, fallback: string) {
+  let normalizedValue = value;
+
+  try {
+    parseTimeParts(value, fallback);
+  } catch {
+    normalizedValue = fallback;
+  }
+
+  const { hours, minutes } = parseTimeParts(normalizedValue, fallback);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function getDurationMinutes(startAt: Date, endAt: Date): number {
@@ -326,9 +322,13 @@ async function getSuggestionForUser(userId: string, suggestionId: string) {
   return suggestion;
 }
 
-async function ensureNoAcceptanceConflicts(userId: string, suggestion: TaskSuggestion) {
+async function ensureNoAcceptanceConflicts(
+  db: Prisma.TransactionClient,
+  userId: string,
+  suggestion: TaskSuggestion
+) {
   const [conflictingSchedule, conflictingCalendarEvent] = await Promise.all([
-    prisma.taskSchedule.findFirst({
+    db.taskSchedule.findFirst({
       where: {
         userId,
         startAt: {
@@ -348,7 +348,7 @@ async function ensureNoAcceptanceConflicts(userId: string, suggestion: TaskSugge
         id: true
       }
     }),
-    prisma.calendarEvent.findFirst({
+    db.calendarEvent.findFirst({
       where: {
         userId,
         startAt: {
@@ -367,18 +367,6 @@ async function ensureNoAcceptanceConflicts(userId: string, suggestion: TaskSugge
   if (conflictingSchedule || conflictingCalendarEvent) {
     throw new AppError(409, "CONFLICT", "Suggestion conflicts with an occupied block");
   }
-}
-
-async function getExactMatchingSchedule(userId: string, suggestion: TaskSuggestion) {
-  return prisma.taskSchedule.findFirst({
-    where: {
-      userId,
-      taskId: suggestion.taskId,
-      startAt: suggestion.startAt,
-      endAt: suggestion.endAt,
-      date: suggestion.date
-    }
-  });
 }
 
 async function getTaskForUser(userId: string, taskId: string) {
@@ -414,10 +402,11 @@ async function getLatestActiveSuggestionForTaskDate(
 
 async function loadSchedulerDayData(
   userId: string,
-  dayStart: Date,
+  date: string,
+  timeZone: string,
   excludedSuggestionId?: string
 ): Promise<SchedulerDayData> {
-  const dayEnd = addDays(dayStart, 1);
+  const dayWindow = getDayWindowForDate(date, timeZone);
 
   const [preferencesRecord, taskSchedules, activeSuggestions, calendarEvents] = await Promise.all([
     prisma.userPreferences.findUnique({
@@ -433,8 +422,8 @@ async function loadSchedulerDayData(
       where: {
         userId,
         date: {
-          gte: dayStart,
-          lt: dayEnd
+          gte: dayWindow.dayStartUtc,
+          lt: dayWindow.dayEndUtc
         }
       },
       select: {
@@ -448,8 +437,8 @@ async function loadSchedulerDayData(
         userId,
         status: SuggestionStatus.ACTIVE,
         date: {
-          gte: dayStart,
-          lt: dayEnd
+          gte: dayWindow.dayStartUtc,
+          lt: dayWindow.dayEndUtc
         },
         ...(excludedSuggestionId
           ? {
@@ -469,10 +458,10 @@ async function loadSchedulerDayData(
       where: {
         userId,
         startAt: {
-          lt: dayEnd
+          lt: dayWindow.dayEndUtc
         },
         endAt: {
-          gt: dayStart
+          gt: dayWindow.dayStartUtc
         }
       },
       select: {
@@ -484,8 +473,18 @@ async function loadSchedulerDayData(
   ]);
 
   const preferences = normalizePreferences(preferencesRecord);
-  const availabilityStart = setUtcTime(dayStart, preferences.workDayStart, DEFAULT_WORKDAY_START);
-  const availabilityEnd = setUtcTime(dayStart, preferences.workDayEnd, DEFAULT_WORKDAY_END);
+  const workDayStart = normalizeTimeValue(preferences.workDayStart, DEFAULT_WORKDAY_START);
+  const workDayEnd = normalizeTimeValue(preferences.workDayEnd, DEFAULT_WORKDAY_END);
+  const availabilityStart = getUtcInstantForLocalTime(
+    date,
+    workDayStart,
+    timeZone
+  );
+  const availabilityEnd = getUtcInstantForLocalTime(
+    date,
+    workDayEnd,
+    timeZone
+  );
   const occupiedBlocks: OccupiedBlock[] = [
     ...taskSchedules.map((schedule) => ({
       startAt: schedule.startAt,
@@ -502,9 +501,11 @@ async function loadSchedulerDayData(
   ];
 
   return {
+    date,
+    timeZone,
     preferences,
-    dayStart,
-    dayEnd,
+    dayStart: dayWindow.dayStartUtc,
+    dayEnd: dayWindow.dayEndUtc,
     availabilityStart,
     availabilityEnd,
     occupiedBlocks
@@ -536,10 +537,89 @@ async function persistSchedulingRun(input: {
   });
 }
 
+async function refreshActiveSuggestionsForDay(
+  userId: string,
+  dayStart: Date,
+  dayEnd: Date
+) {
+  const activeSuggestions = await prisma.taskSuggestion.findMany({
+    where: {
+      userId,
+      status: SuggestionStatus.ACTIVE,
+      date: {
+        gte: dayStart,
+        lt: dayEnd
+      }
+    },
+    select: {
+      id: true,
+      taskId: true
+    }
+  });
+
+  const refreshedTaskIds = [...new Set(activeSuggestions.map((suggestion) => suggestion.taskId))];
+
+  if (activeSuggestions.length === 0) {
+    return {
+      refreshedTaskIds
+    };
+  }
+
+  const missedSchedules = await prisma.taskSchedule.findMany({
+    where: {
+      userId,
+      taskId: {
+        in: refreshedTaskIds
+      },
+      completionStatus: CompletionStatus.MISSED
+    },
+    select: {
+      taskId: true
+    }
+  });
+
+  const missedTaskIds = new Set(missedSchedules.map((schedule) => schedule.taskId));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.taskSuggestion.updateMany({
+      where: {
+        userId,
+        status: SuggestionStatus.ACTIVE,
+        date: {
+          gte: dayStart,
+          lt: dayEnd
+        }
+      },
+      data: {
+        status: SuggestionStatus.EXPIRED
+      }
+    });
+
+    for (const taskId of refreshedTaskIds) {
+      await tx.task.updateMany({
+        where: {
+          id: taskId,
+          userId,
+          status: TaskStatus.SUGGESTED
+        },
+        data: {
+          status: missedTaskIds.has(taskId) ? TaskStatus.MISSED : TaskStatus.UNSCHEDULED
+        }
+      });
+    }
+  });
+
+  return {
+    refreshedTaskIds
+  };
+}
+
 export async function planDay(userId: string, input: PlanDayInput): Promise<PlanDayResult> {
-  const date = input.date ?? getTodayDateString();
-  const dayStart = parseDateStart(date);
-  const dayEnd = addDays(dayStart, 1);
+  const timeZone = await getUserTimeZone(userId);
+  const date = input.date ?? getTodayDateStringInTimeZone(timeZone);
+  const dayWindow = getDayWindowForDate(date, timeZone);
+
+  await refreshActiveSuggestionsForDay(userId, dayWindow.dayStartUtc, dayWindow.dayEndUtc);
 
   const [preferencesRecord, candidateTasks, activeSuggestions, taskSchedules, calendarEvents] =
     await Promise.all([
@@ -573,8 +653,8 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
           userId,
           status: SuggestionStatus.ACTIVE,
           date: {
-            gte: dayStart,
-            lt: dayEnd
+            gte: dayWindow.dayStartUtc,
+            lt: dayWindow.dayEndUtc
           }
         },
         select: {
@@ -589,8 +669,8 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
         where: {
           userId,
           date: {
-            gte: dayStart,
-            lt: dayEnd
+            gte: dayWindow.dayStartUtc,
+            lt: dayWindow.dayEndUtc
           }
         },
         select: {
@@ -603,10 +683,10 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
         where: {
           userId,
           startAt: {
-            lt: dayEnd
+            lt: dayWindow.dayEndUtc
           },
           endAt: {
-            gt: dayStart
+            gt: dayWindow.dayStartUtc
           }
         },
         select: {
@@ -614,7 +694,7 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
           endAt: true
         },
         orderBy: [{ startAt: "asc" }, { id: "asc" }]
-        })
+      })
     ]);
 
   const preferences = normalizePreferences(preferencesRecord);
@@ -625,8 +705,8 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
   if (preferences.suggestionLimit <= 0) {
     await persistSchedulingRun({
       userId,
-      dayStart,
-      dayEnd,
+      dayStart: dayWindow.dayStartUtc,
+      dayEnd: dayWindow.dayEndUtc,
       eligibleTaskCount: 0,
       suggestionCount: 0,
       unscheduledTaskCount
@@ -646,15 +726,17 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
   const activeSuggestionTaskIds = new Set(activeSuggestions.map((suggestion) => suggestion.taskId));
   const eligibleTasks: EligibleTask[] = candidateTasks
     .filter((task) => !activeSuggestionTaskIds.has(task.id))
-    .filter((task) => !task.deadline || task.deadline.getTime() >= dayStart.getTime())
+    .filter((task) => !task.deadline || task.deadline.getTime() >= dayWindow.dayStartUtc.getTime())
     .map((task) => ({
       id: task.id,
       deadline: task.deadline,
       durationMinutes: task.durationMinutes ?? preferences.defaultTaskDuration
     }));
 
-  const availabilityStart = setUtcTime(dayStart, preferences.workDayStart, DEFAULT_WORKDAY_START);
-  const availabilityEnd = setUtcTime(dayStart, preferences.workDayEnd, DEFAULT_WORKDAY_END);
+  const workDayStart = normalizeTimeValue(preferences.workDayStart, DEFAULT_WORKDAY_START);
+  const workDayEnd = normalizeTimeValue(preferences.workDayEnd, DEFAULT_WORKDAY_END);
+  const availabilityStart = getUtcInstantForLocalTime(date, workDayStart, timeZone);
+  const availabilityEnd = getUtcInstantForLocalTime(date, workDayEnd, timeZone);
   const occupiedBlocks: OccupiedBlock[] = [
     ...taskSchedules.map((schedule) => ({
       startAt: schedule.startAt,
@@ -669,12 +751,22 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
       endAt: event.endAt
     }))
   ];
-  const freeSlots = buildFreeSlots(availabilityStart, availabilityEnd, occupiedBlocks);
 
-  let createdSuggestion: PlannedSuggestion | null = null;
+  const createdSuggestions: PlannedSuggestion[] = [];
+  let mutableOccupiedBlocks = [...occupiedBlocks];
 
-  if (freeSlots.length > 0 && eligibleTasks.length > 0) {
-    outer: for (const task of eligibleTasks) {
+  if (eligibleTasks.length > 0) {
+    for (const task of eligibleTasks) {
+      if (createdSuggestions.length >= preferences.suggestionLimit) {
+        break;
+      }
+
+      const freeSlots = buildFreeSlots(
+        availabilityStart,
+        availabilityEnd,
+        mutableOccupiedBlocks
+      );
+
       for (const slot of freeSlots) {
         if (getDurationMinutes(slot.startAt, slot.endAt) < task.durationMinutes) {
           continue;
@@ -698,7 +790,7 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
               taskId: task.id,
               startAt: candidateStart,
               endAt: candidateEnd,
-              date: dayStart,
+              date: dayWindow.dayStartUtc,
               rank: 1,
               score: 1,
               status: SuggestionStatus.ACTIVE,
@@ -721,25 +813,32 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
           return suggestion;
         });
 
-        createdSuggestion = serializeSuggestion(created);
-        break outer;
+        createdSuggestions.push(serializeSuggestion(created));
+        mutableOccupiedBlocks = [
+          ...mutableOccupiedBlocks,
+          {
+            startAt: candidateStart,
+            endAt: candidateEnd
+          }
+        ];
+        break;
       }
     }
   }
 
-  const suggestionCount = createdSuggestion ? 1 : 0;
+  const suggestionCount = createdSuggestions.length;
 
   await persistSchedulingRun({
     userId,
-    dayStart,
-    dayEnd,
+    dayStart: dayWindow.dayStartUtc,
+    dayEnd: dayWindow.dayEndUtc,
     eligibleTaskCount: eligibleTasks.length,
     suggestionCount,
     unscheduledTaskCount
   });
 
   return {
-    suggestions: createdSuggestion ? [createdSuggestion] : [],
+    suggestions: createdSuggestions,
     runSummary: {
       triggerType: "PLAN_DAY",
       eligibleTaskCount: eligibleTasks.length,
@@ -755,62 +854,93 @@ export async function acceptSuggestion(
 ): Promise<AcceptSuggestionResult> {
   console.info("accept_suggestion", { userId, suggestionId });
 
-  const suggestion = await getSuggestionForUser(userId, suggestionId);
-
-  if (suggestion.status === SuggestionStatus.ACCEPTED) {
-    const schedule = await getExactMatchingSchedule(userId, suggestion);
-
-    if (!schedule) {
-      throw new AppError(409, "CONFLICT", "Accepted suggestion is missing its schedule");
-    }
-
-    const task = await prisma.task.update({
+  const { schedule, task } = await prisma.$transaction(async (tx) => {
+    const suggestion = await tx.taskSuggestion.findFirst({
       where: {
-        id: suggestion.taskId
-      },
-      data: {
-        status: TaskStatus.SCHEDULED
+        id: suggestionId,
+        userId
       }
     });
 
-    return {
-      schedule: serializeAcceptSchedule(schedule),
-      task: {
-        id: task.id,
-        status: TaskStatus.SCHEDULED
+    if (!suggestion) {
+      throw new AppError(404, "NOT_FOUND", "Suggestion not found");
+    }
+
+    if (suggestion.status === SuggestionStatus.ACCEPTED) {
+      const existingSchedule = await tx.taskSchedule.findFirst({
+        where: {
+          userId,
+          taskId: suggestion.taskId,
+          startAt: suggestion.startAt,
+          endAt: suggestion.endAt
+        }
+      });
+
+      if (!existingSchedule) {
+        throw new AppError(409, "CONFLICT", "Accepted suggestion is missing its schedule");
       }
-    };
-  }
 
-  if (suggestion.status !== SuggestionStatus.ACTIVE) {
-    throw new AppError(409, "INVALID_STATE", "Suggestion is not active");
-  }
+      const task = await tx.task.update({
+        where: {
+          id: suggestion.taskId
+        },
+        data: {
+          status: TaskStatus.SCHEDULED
+        }
+      });
 
-  await ensureNoAcceptanceConflicts(userId, suggestion);
+      return { schedule: existingSchedule, task };
+    }
 
-  const { schedule, task } = await prisma.$transaction(async (tx) => {
+    if (suggestion.status !== SuggestionStatus.ACTIVE) {
+      throw new AppError(409, "INVALID_STATE", "Suggestion is not active");
+    }
+
     let schedule = await tx.taskSchedule.findFirst({
       where: {
         userId,
         taskId: suggestion.taskId,
         startAt: suggestion.startAt,
-        endAt: suggestion.endAt,
-        date: suggestion.date
+        endAt: suggestion.endAt
       }
     });
 
     if (!schedule) {
-      schedule = await tx.taskSchedule.create({
-        data: {
-          taskId: suggestion.taskId,
-          userId,
-          startAt: suggestion.startAt,
-          endAt: suggestion.endAt,
-          date: suggestion.date,
-          isLocked: false,
-          completionStatus: CompletionStatus.PENDING
+      await ensureNoAcceptanceConflicts(tx, userId, suggestion);
+
+      try {
+        schedule = await tx.taskSchedule.create({
+          data: {
+            taskId: suggestion.taskId,
+            userId,
+            startAt: suggestion.startAt,
+            endAt: suggestion.endAt,
+            date: suggestion.date,
+            isLocked: false,
+            completionStatus: CompletionStatus.PENDING
+          }
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          schedule = await tx.taskSchedule.findFirst({
+            where: {
+              userId,
+              taskId: suggestion.taskId,
+              startAt: suggestion.startAt,
+              endAt: suggestion.endAt
+            }
+          });
+        } else {
+          throw error;
         }
-      });
+      }
+    }
+
+    if (!schedule) {
+      throw new AppError(409, "CONFLICT", "Accepted suggestion is missing its schedule");
     }
 
     await tx.taskSuggestion.update({
@@ -928,7 +1058,13 @@ export async function retrySuggestion(
   }
 
   const task = await getTaskForUser(userId, suggestion.taskId);
-  const schedulerDayData = await loadSchedulerDayData(userId, suggestion.date, suggestion.id);
+  const timeZone = await getUserTimeZone(userId);
+  const schedulerDayData = await loadSchedulerDayData(
+    userId,
+    getDateStringForInstantInTimeZone(suggestion.date, timeZone),
+    timeZone,
+    suggestion.id
+  );
   const durationMinutes = task.durationMinutes ?? schedulerDayData.preferences.defaultTaskDuration;
   const freeSlots = buildFreeSlots(
     schedulerDayData.availabilityStart,

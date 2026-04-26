@@ -87,6 +87,7 @@ model TaskSchedule {
   @@index([userId, date])
   @@index([userId, startAt, endAt])
   @@index([taskId])
+  @@unique([userId, taskId, startAt, endAt])
 }
 
 model TaskSuggestion {

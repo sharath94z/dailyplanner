@@ -9,6 +9,7 @@ import {
   dismissSuggestion,
   retrySuggestion
 } from "../../lib/client-api/suggestions";
+import { getUtcInstantForLocalTime } from "../../lib/planner-time";
 import type { TimelineItem, TimelineResult } from "./types";
 
 const PAGE_CONTAINER_STYLE = {
@@ -28,26 +29,27 @@ const CARD_STYLE = {
 type TimelineViewProps = {
   timeline: TimelineResult;
   mockUserId: string;
+  timeZone: string;
 };
 
 type ItemAction = "accept" | "retry" | "dismiss" | "complete" | null;
 
-function formatDateLabel(date: string): string {
+function formatDateLabel(date: string, timeZone: string): string {
   return new Intl.DateTimeFormat("en-US", {
     weekday: "long",
     month: "short",
     day: "numeric",
     year: "numeric",
-    timeZone: "UTC"
-  }).format(new Date(`${date}T00:00:00.000Z`));
+    timeZone
+  }).format(getUtcInstantForLocalTime(date, "00:00", timeZone));
 }
 
-function formatTimeRange(startAt: string, endAt: string): string {
+function formatTimeRange(startAt: string, endAt: string, timeZone: string): string {
   const formatter = new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-    timeZone: "UTC"
+    timeZone
   });
 
   return `${formatter.format(new Date(startAt))} - ${formatter.format(new Date(endAt))}`;
@@ -129,7 +131,7 @@ function getPendingLabel(action: Exclude<ItemAction, null>) {
   return "Dismissing...";
 }
 
-export function TimelineView({ timeline, mockUserId }: TimelineViewProps) {
+export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewProps) {
   const router = useRouter();
   const [pendingItemKey, setPendingItemKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ItemAction>(null);
@@ -232,7 +234,9 @@ export function TimelineView({ timeline, mockUserId }: TimelineViewProps) {
           Day timeline
         </p>
         <h1 style={{ margin: "0.4rem 0 0", fontSize: "2rem", lineHeight: 1.1 }}>Timeline</h1>
-        <p style={{ margin: "0.6rem 0 0", color: "#4b5563" }}>{formatDateLabel(timeline.date)}</p>
+        <p style={{ margin: "0.6rem 0 0", color: "#4b5563" }}>
+          {formatDateLabel(timeline.date, timeZone)}
+        </p>
       </section>
 
       <section
@@ -373,7 +377,7 @@ export function TimelineView({ timeline, mockUserId }: TimelineViewProps) {
                         opacity: item.type === "task_schedule" && item.state === "PENDING" ? 0.9 : 0.8
                       }}
                     >
-                      {formatTimeRange(item.startAt, item.endAt)}
+                      {formatTimeRange(item.startAt, item.endAt, timeZone)}
                     </div>
                   </div>
 

@@ -14,6 +14,8 @@ import type {
   TimelineSummary
 } from "../../features/timeline/types";
 import { prisma } from "../../lib/db";
+import { getDayWindowForDate } from "../../lib/planner-time";
+import { getUserTimeZone } from "../../lib/user-timezone";
 import type { TimelineQuery } from "../../lib/validators/timeline";
 import { reconcileMissedSchedulesForDay } from "../schedules/schedule.service";
 
@@ -35,16 +37,6 @@ type SuggestionWithTask = TaskSuggestion & {
     title: string;
   };
 };
-
-function parseDateStart(date: string): Date {
-  return new Date(`${date}T00:00:00.000Z`);
-}
-
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
 
 function toIso(value: Date): string {
   return value.toISOString();
@@ -118,10 +110,15 @@ export async function getTimelineForDate(
   userId: string,
   input: TimelineQuery
 ): Promise<TimelineResult> {
-  const dayStart = parseDateStart(input.date);
-  const dayEnd = addDays(dayStart, 1);
+  const timeZone = await getUserTimeZone(userId);
+  const dayWindow = getDayWindowForDate(input.date, timeZone);
 
-  await reconcileMissedSchedulesForDay(userId, dayStart, dayEnd, new Date());
+  await reconcileMissedSchedulesForDay(
+    userId,
+    dayWindow.dayStartUtc,
+    dayWindow.dayEndUtc,
+    new Date()
+  );
 
   const [preferences, schedules, suggestions, calendarEvents] = await Promise.all([
     prisma.userPreferences.findUnique({
@@ -136,8 +133,8 @@ export async function getTimelineForDate(
       where: {
         userId,
         date: {
-          gte: dayStart,
-          lt: dayEnd
+          gte: dayWindow.dayStartUtc,
+          lt: dayWindow.dayEndUtc
         }
       },
       include: {
@@ -155,8 +152,8 @@ export async function getTimelineForDate(
             userId,
             status: SuggestionStatus.ACTIVE,
             date: {
-              gte: dayStart,
-              lt: dayEnd
+              gte: dayWindow.dayStartUtc,
+              lt: dayWindow.dayEndUtc
             }
           },
           include: {
@@ -174,10 +171,10 @@ export async function getTimelineForDate(
           where: {
             userId,
             startAt: {
-              lt: dayEnd
+              lt: dayWindow.dayEndUtc
             },
             endAt: {
-              gt: dayStart
+              gt: dayWindow.dayStartUtc
             }
           },
           orderBy: [{ startAt: "asc" }, { id: "asc" }]
