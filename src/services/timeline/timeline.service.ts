@@ -3,6 +3,7 @@ import "server-only";
 import {
   CompletionStatus,
   SuggestionStatus,
+  type Routine,
   type CalendarEvent,
   type TaskSchedule,
   type TaskSuggestion
@@ -10,11 +11,15 @@ import {
 
 import type {
   TimelineItem,
-  TimelineResult,
-  TimelineSummary
+  TimelineResult
 } from "../../features/timeline/types";
 import { prisma } from "../../lib/db";
-import { getDayWindowForDate } from "../../lib/planner-time";
+import { getDayWindowForDate, getUtcInstantForLocalTime, getWeekdayFromDateString } from "../../lib/planner-time";
+import {
+  getBlockDurationMinutes,
+  getMergedBlockDurationMinutes,
+  type TimeBlock
+} from "../../lib/time-blocks";
 import { getUserTimeZone } from "../../lib/user-timezone";
 import type { TimelineQuery } from "../../lib/validators/timeline";
 import { reconcileMissedSchedulesForDay } from "../schedules/schedule.service";
@@ -22,8 +27,9 @@ import { reconcileMissedSchedulesForDay } from "../schedules/schedule.service";
 const DEFAULT_DAILY_FREE_MINUTES = 360;
 const ITEM_TYPE_PRIORITY = {
   calendar_event: 0,
-  task_schedule: 1,
-  task_suggestion: 2
+  routine: 1,
+  task_schedule: 2,
+  task_suggestion: 3
 } as const;
 
 type ScheduleWithTask = TaskSchedule & {
@@ -40,10 +46,6 @@ type SuggestionWithTask = TaskSuggestion & {
 
 function toIso(value: Date): string {
   return value.toISOString();
-}
-
-function getDurationMinutes(startAt: Date, endAt: Date): number {
-  return Math.max(0, Math.round((endAt.getTime() - startAt.getTime()) / 60000));
 }
 
 function serializeCalendarEvent(event: CalendarEvent): TimelineItem {
@@ -71,6 +73,21 @@ function serializeSchedule(schedule: ScheduleWithTask): TimelineItem {
   };
 }
 
+function serializeRoutine(
+  routine: Routine,
+  date: string,
+  timeZone: string
+): TimelineItem {
+  return {
+    id: routine.id,
+    type: "routine",
+    title: routine.title,
+    startAt: toIso(getUtcInstantForLocalTime(date, routine.startTime, timeZone)),
+    endAt: toIso(getUtcInstantForLocalTime(date, routine.endTime, timeZone)),
+    state: "FIXED"
+  };
+}
+
 function serializeSuggestion(suggestion: SuggestionWithTask): TimelineItem {
   return {
     id: suggestion.id,
@@ -82,6 +99,17 @@ function serializeSuggestion(suggestion: SuggestionWithTask): TimelineItem {
     endAt: toIso(suggestion.endAt),
     state: suggestion.status
   };
+}
+
+function getRoutineBlocks(
+  routines: Array<{ startTime: string; endTime: string }>,
+  date: string,
+  timeZone: string
+): TimeBlock[] {
+  return routines.map((routine) => ({
+    startAt: getUtcInstantForLocalTime(date, routine.startTime, timeZone),
+    endAt: getUtcInstantForLocalTime(date, routine.endTime, timeZone)
+  }));
 }
 
 function sortTimelineItems(items: TimelineItem[]): TimelineItem[] {
@@ -112,6 +140,7 @@ export async function getTimelineForDate(
 ): Promise<TimelineResult> {
   const timeZone = await getUserTimeZone(userId);
   const dayWindow = getDayWindowForDate(input.date, timeZone);
+  const weekday = getWeekdayFromDateString(input.date);
 
   await reconcileMissedSchedulesForDay(
     userId,
@@ -120,7 +149,7 @@ export async function getTimelineForDate(
     new Date()
   );
 
-  const [preferences, schedules, suggestions, calendarEvents] = await Promise.all([
+  const [preferences, routines, schedules, suggestions, calendarEvents] = await Promise.all([
     prisma.userPreferences.findUnique({
       where: {
         userId
@@ -128,6 +157,16 @@ export async function getTimelineForDate(
       select: {
         maxDailyPlannedMinutes: true
       }
+    }),
+    prisma.routine.findMany({
+      where: {
+        userId,
+        isActive: true,
+        daysOfWeek: {
+          has: weekday
+        }
+      },
+      orderBy: [{ startTime: "asc" }, { id: "asc" }]
     }),
     prisma.taskSchedule.findMany({
       where: {
@@ -184,20 +223,23 @@ export async function getTimelineForDate(
 
   const items = sortTimelineItems([
     ...calendarEvents.map(serializeCalendarEvent),
+    ...routines.map((routine) => serializeRoutine(routine, input.date, timeZone)),
     ...schedules.map(serializeSchedule),
     ...suggestions.map(serializeSuggestion)
   ]);
+  const routineBlocks = getRoutineBlocks(routines, input.date, timeZone);
 
   const busyMinutes = calendarEvents.reduce(
-    (total, event) => total + getDurationMinutes(event.startAt, event.endAt),
+    (total, event) => total + getBlockDurationMinutes(event.startAt, event.endAt),
     0
   );
+  const routineMinutes = getMergedBlockDurationMinutes(routineBlocks);
   const scheduledMinutes = schedules.reduce(
-    (total, schedule) => total + getDurationMinutes(schedule.startAt, schedule.endAt),
+    (total, schedule) => total + getBlockDurationMinutes(schedule.startAt, schedule.endAt),
     0
   );
   const suggestedMinutes = suggestions.reduce(
-    (total, suggestion) => total + getDurationMinutes(suggestion.startAt, suggestion.endAt),
+    (total, suggestion) => total + getBlockDurationMinutes(suggestion.startAt, suggestion.endAt),
     0
   );
   const dailyCapacity = preferences?.maxDailyPlannedMinutes ?? DEFAULT_DAILY_FREE_MINUTES;
@@ -207,9 +249,10 @@ export async function getTimelineForDate(
     items,
     summary: {
       busyMinutes,
+      routineMinutes,
       scheduledMinutes,
       suggestedMinutes,
-      freeMinutes: Math.max(0, dailyCapacity - scheduledMinutes)
+      freeMinutes: Math.max(0, dailyCapacity - scheduledMinutes - routineMinutes)
     }
   };
 }

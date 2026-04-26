@@ -121,10 +121,10 @@ CREATE TABLE "Routine" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "title" TEXT NOT NULL,
-    "durationMinutes" INTEGER NOT NULL,
-    "rrule" TEXT NOT NULL,
-    "preferredTimeWindow" TEXT,
-    "isEnabled" BOOLEAN NOT NULL DEFAULT true,
+    "startTime" TEXT NOT NULL,
+    "endTime" TEXT NOT NULL,
+    "daysOfWeek" INTEGER[],
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -222,6 +222,9 @@ CREATE INDEX "TaskSchedule_userId_startAt_endAt_idx" ON "TaskSchedule"("userId",
 CREATE INDEX "TaskSchedule_taskId_idx" ON "TaskSchedule"("taskId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "TaskSchedule_userId_taskId_startAt_endAt_key" ON "TaskSchedule"("userId", "taskId", "startAt", "endAt");
+
+-- CreateIndex
 CREATE INDEX "TaskSuggestion_userId_date_status_idx" ON "TaskSuggestion"("userId", "date", "status");
 
 -- CreateIndex
@@ -231,7 +234,7 @@ CREATE INDEX "TaskSuggestion_taskId_status_idx" ON "TaskSuggestion"("taskId", "s
 CREATE INDEX "TaskSuggestion_generatedAt_idx" ON "TaskSuggestion"("generatedAt");
 
 -- CreateIndex
-CREATE INDEX "Routine_userId_isEnabled_idx" ON "Routine"("userId", "isEnabled");
+CREATE INDEX "Routine_userId_isActive_idx" ON "Routine"("userId", "isActive");
 
 -- CreateIndex
 CREATE INDEX "CalendarConnection_userId_syncStatus_idx" ON "CalendarConnection"("userId", "syncStatus");

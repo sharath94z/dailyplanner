@@ -112,18 +112,18 @@ model TaskSuggestion {
 }
 
 model Routine {
-  id                  String   @id @default(cuid())
-  userId              String
-  title               String
-  durationMinutes     Int
-  rrule               String
-  preferredTimeWindow String?
-  isEnabled           Boolean  @default(true)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  userId     String
+  title      String
+  startTime  String
+  endTime    String
+  daysOfWeek Int[]
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId, isEnabled])
+  @@index([userId, isActive])
 }
 
 model CalendarConnection {

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
+import { createRoutine } from "../../lib/client-api/routines";
 import { completeSchedule } from "../../lib/client-api/schedules";
 import {
   acceptSuggestion,
@@ -25,6 +26,16 @@ const CARD_STYLE = {
   borderRadius: "1rem",
   backgroundColor: "#ffffff"
 } as const;
+
+const WEEKDAY_OPTIONS = [
+  { label: "Sun", value: 0 },
+  { label: "Mon", value: 1 },
+  { label: "Tue", value: 2 },
+  { label: "Wed", value: 3 },
+  { label: "Thu", value: 4 },
+  { label: "Fri", value: 5 },
+  { label: "Sat", value: 6 }
+] as const;
 
 type TimelineViewProps = {
   timeline: TimelineResult;
@@ -88,6 +99,14 @@ function getItemAccent(item: TimelineItem) {
     };
   }
 
+  if (item.type === "routine") {
+    return {
+      border: "1px solid #0f766e",
+      backgroundColor: "#ccfbf1",
+      color: "#134e4a"
+    };
+  }
+
   return {
     border: "1px dashed #2563eb",
     backgroundColor: "#eff6ff",
@@ -98,6 +117,10 @@ function getItemAccent(item: TimelineItem) {
 function getItemLabel(item: TimelineItem): string {
   if (item.type === "calendar_event") {
     return `Calendar • ${item.state}`;
+  }
+
+  if (item.type === "routine") {
+    return "Routine • FIXED";
   }
 
   if (item.type === "task_schedule") {
@@ -136,7 +159,19 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
   const [pendingItemKey, setPendingItemKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ItemAction>(null);
   const [errorByItemKey, setErrorByItemKey] = useState<Record<string, string>>({});
+  const [routineTitle, setRoutineTitle] = useState("");
+  const [routineStartTime, setRoutineStartTime] = useState("09:00");
+  const [routineEndTime, setRoutineEndTime] = useState("10:00");
+  const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [routineError, setRoutineError] = useState<string | null>(null);
+  const [isCreatingRoutine, setIsCreatingRoutine] = useState(false);
   const [, startTransition] = useTransition();
+
+  function toggleSelectedDay(day: number) {
+    setSelectedDays((current) =>
+      current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort()
+    );
+  }
 
   async function handleSuggestionAction(
     item: TimelineItem,
@@ -218,6 +253,36 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
     }
   }
 
+  async function handleCreateRoutine() {
+    setRoutineError(null);
+    setIsCreatingRoutine(true);
+
+    try {
+      await createRoutine({
+        mockUserId,
+        title: routineTitle,
+        startTime: routineStartTime,
+        endTime: routineEndTime,
+        daysOfWeek: selectedDays
+      });
+
+      setRoutineTitle("");
+      setRoutineStartTime("09:00");
+      setRoutineEndTime("10:00");
+      setSelectedDays([]);
+
+      startTransition(() => {
+        router.refresh();
+      });
+    } catch (error) {
+      setRoutineError(error instanceof Error ? error.message : "Request failed");
+      setIsCreatingRoutine(false);
+      return;
+    }
+
+    setIsCreatingRoutine(false);
+  }
+
   return (
     <main style={PAGE_CONTAINER_STYLE}>
       <section style={{ marginBottom: "1.5rem" }}>
@@ -248,6 +313,131 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
       >
         <div
           style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "1rem"
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: "1rem" }}>Add routine</h2>
+        </div>
+        <div style={{ display: "grid", gap: "0.75rem" }}>
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Title</span>
+            <input
+              type="text"
+              value={routineTitle}
+              onChange={(event) => setRoutineTitle(event.target.value)}
+              placeholder="Lunch"
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: "0.75rem",
+                padding: "0.65rem 0.8rem",
+                fontSize: "0.95rem"
+              }}
+            />
+          </label>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.75rem" }}>
+            <label style={{ display: "grid", gap: "0.35rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Start</span>
+              <input
+                type="time"
+                value={routineStartTime}
+                onChange={(event) => setRoutineStartTime(event.target.value)}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "0.75rem",
+                  padding: "0.65rem 0.8rem",
+                  fontSize: "0.95rem"
+                }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.35rem" }}>
+              <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>End</span>
+              <input
+                type="time"
+                value={routineEndTime}
+                onChange={(event) => setRoutineEndTime(event.target.value)}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "0.75rem",
+                  padding: "0.65rem 0.8rem",
+                  fontSize: "0.95rem"
+                }}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: "grid", gap: "0.45rem" }}>
+            <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Days</span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+              {WEEKDAY_OPTIONS.map((option) => (
+                <label
+                  key={option.value}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    border: "1px solid #d1d5db",
+                    borderRadius: "999px",
+                    padding: "0.45rem 0.65rem",
+                    fontSize: "0.875rem"
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedDays.includes(option.value)}
+                    onChange={() => toggleSelectedDay(option.value)}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <button
+              type="button"
+              onClick={handleCreateRoutine}
+              disabled={isCreatingRoutine}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #0f766e",
+                backgroundColor: "#0f766e",
+                color: "#ffffff",
+                padding: "0.6rem 1rem",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                opacity: isCreatingRoutine ? 0.7 : 1
+              }}
+            >
+              {isCreatingRoutine ? "Creating..." : "Create routine"}
+            </button>
+            {routineError ? (
+              <p
+                style={{
+                  margin: "0.65rem 0 0",
+                  fontSize: "0.875rem",
+                  color: "#b91c1c"
+                }}
+              >
+                {routineError}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      <section
+        style={{
+          ...CARD_STYLE,
+          padding: "1rem",
+          marginBottom: "1rem"
+        }}
+      >
+        <div
+          style={{
             display: "grid",
             gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
             gap: "0.75rem"
@@ -257,6 +447,12 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
             <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>Busy</div>
             <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
               {timeline.summary.busyMinutes}m
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>Routine</div>
+            <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+              {timeline.summary.routineMinutes}m
             </div>
           </div>
           <div>
