@@ -1,4 +1,8 @@
-export type TimelineItemType = "task_schedule" | "task_suggestion" | "calendar_event";
+export type TimelineItemType =
+  | "task_schedule"
+  | "task_suggestion"
+  | "calendar_event"
+  | "routine";
 
 export type TimelineItem = {
   id: string;
@@ -16,6 +20,7 @@ export type TimelineItem = {
 
 export type TimelineSummary = {
   busyMinutes: number;
+  routineMinutes: number;
   scheduledMinutes: number;
   suggestedMinutes: number;
   freeMinutes: number;

@@ -163,6 +163,11 @@ export function getUtcInstantForLocalTime(date: string, time: string, timeZone: 
   return new Date(candidate);
 }
 
+export function getWeekdayFromDateString(date: string) {
+  const parsedDate = parseDateString(date);
+  return new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day)).getUTCDay();
+}
+
 export function getDayWindowForDate(date: string, timeZone: string): DayWindow {
   const dayStartUtc = getUtcInstantForLocalTime(date, "00:00", timeZone);
   const dayEndUtc = getUtcInstantForLocalTime(shiftDateString(date, 1), "00:00", timeZone);

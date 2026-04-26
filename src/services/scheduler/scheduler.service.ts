@@ -7,6 +7,7 @@ import {
   SchedulingTriggerType,
   SuggestionStatus,
   TaskStatus,
+  type Routine,
   type Task,
   type TaskSchedule,
   type TaskSuggestion
@@ -18,7 +19,8 @@ import {
   getDateStringForInstantInTimeZone,
   getDayWindowForDate,
   getTodayDateStringInTimeZone,
-  getUtcInstantForLocalTime
+  getUtcInstantForLocalTime,
+  getWeekdayFromDateString
 } from "../../lib/planner-time";
 import { getUserTimeZone } from "../../lib/user-timezone";
 import type { PlanDayInput } from "../../lib/validators/suggestions";
@@ -407,8 +409,9 @@ async function loadSchedulerDayData(
   excludedSuggestionId?: string
 ): Promise<SchedulerDayData> {
   const dayWindow = getDayWindowForDate(date, timeZone);
+  const weekday = getWeekdayFromDateString(date);
 
-  const [preferencesRecord, taskSchedules, activeSuggestions, calendarEvents] = await Promise.all([
+  const [preferencesRecord, routines, taskSchedules, activeSuggestions, calendarEvents] = await Promise.all([
     prisma.userPreferences.findUnique({
       where: { userId },
       select: {
@@ -417,6 +420,16 @@ async function loadSchedulerDayData(
         defaultTaskDuration: true,
         suggestionLimit: true
       }
+    }),
+    prisma.routine.findMany({
+      where: {
+        userId,
+        isActive: true,
+        daysOfWeek: {
+          has: weekday
+        }
+      },
+      orderBy: [{ startTime: "asc" }, { id: "asc" }]
     }),
     prisma.taskSchedule.findMany({
       where: {
@@ -486,6 +499,10 @@ async function loadSchedulerDayData(
     timeZone
   );
   const occupiedBlocks: OccupiedBlock[] = [
+    ...routines.map((routine) => ({
+      startAt: getUtcInstantForLocalTime(date, routine.startTime, timeZone),
+      endAt: getUtcInstantForLocalTime(date, routine.endTime, timeZone)
+    })),
     ...taskSchedules.map((schedule) => ({
       startAt: schedule.startAt,
       endAt: schedule.endAt
@@ -618,10 +635,11 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
   const timeZone = await getUserTimeZone(userId);
   const date = input.date ?? getTodayDateStringInTimeZone(timeZone);
   const dayWindow = getDayWindowForDate(date, timeZone);
+  const weekday = getWeekdayFromDateString(date);
 
   await refreshActiveSuggestionsForDay(userId, dayWindow.dayStartUtc, dayWindow.dayEndUtc);
 
-  const [preferencesRecord, candidateTasks, activeSuggestions, taskSchedules, calendarEvents] =
+  const [preferencesRecord, candidateTasks, routines, activeSuggestions, taskSchedules, calendarEvents] =
     await Promise.all([
       prisma.userPreferences.findUnique({
         where: { userId },
@@ -647,6 +665,16 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
           createdAt: true
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }]
+      }),
+      prisma.routine.findMany({
+        where: {
+          userId,
+          isActive: true,
+          daysOfWeek: {
+            has: weekday
+          }
+        },
+        orderBy: [{ startTime: "asc" }, { id: "asc" }]
       }),
       prisma.taskSuggestion.findMany({
         where: {
@@ -738,6 +766,10 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
   const availabilityStart = getUtcInstantForLocalTime(date, workDayStart, timeZone);
   const availabilityEnd = getUtcInstantForLocalTime(date, workDayEnd, timeZone);
   const occupiedBlocks: OccupiedBlock[] = [
+    ...routines.map((routine) => ({
+      startAt: getUtcInstantForLocalTime(date, routine.startTime, timeZone),
+      endAt: getUtcInstantForLocalTime(date, routine.endTime, timeZone)
+    })),
     ...taskSchedules.map((schedule) => ({
       startAt: schedule.startAt,
       endAt: schedule.endAt
