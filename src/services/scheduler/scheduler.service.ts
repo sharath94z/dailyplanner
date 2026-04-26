@@ -7,7 +7,6 @@ import {
   SchedulingTriggerType,
   SuggestionStatus,
   TaskStatus,
-  type Routine,
   type Task,
   type TaskSchedule,
   type TaskSuggestion
@@ -22,6 +21,7 @@ import {
   getUtcInstantForLocalTime,
   getWeekdayFromDateString
 } from "../../lib/planner-time";
+import { getBlockDurationMinutes, mergeTimeBlocks, type TimeBlock } from "../../lib/time-blocks";
 import { getUserTimeZone } from "../../lib/user-timezone";
 import type { PlanDayInput } from "../../lib/validators/suggestions";
 
@@ -31,10 +31,7 @@ const DEFAULT_TASK_DURATION_MINUTES = 30;
 const DEFAULT_SUGGESTION_LIMIT = 5;
 const MINIMUM_USEFUL_DURATION_MINUTES = 15;
 
-type OccupiedBlock = {
-  startAt: Date;
-  endAt: Date;
-};
+type OccupiedBlock = TimeBlock;
 
 export type PlannedSuggestion = {
   id: string;
@@ -155,10 +152,6 @@ function normalizeTimeValue(value: string, fallback: string) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function getDurationMinutes(startAt: Date, endAt: Date): number {
-  return Math.max(0, Math.round((endAt.getTime() - startAt.getTime()) / 60000));
-}
-
 function normalizePreferences(preferences: {
   workDayStart: string;
   workDayEnd: string;
@@ -174,27 +167,7 @@ function normalizePreferences(preferences: {
 }
 
 function mergeOccupiedBlocks(blocks: OccupiedBlock[]): OccupiedBlock[] {
-  if (blocks.length === 0) {
-    return [];
-  }
-
-  const sortedBlocks = [...blocks].sort((left, right) => left.startAt.getTime() - right.startAt.getTime());
-  const merged: OccupiedBlock[] = [sortedBlocks[0]];
-
-  for (const block of sortedBlocks.slice(1)) {
-    const current = merged[merged.length - 1];
-
-    if (block.startAt.getTime() <= current.endAt.getTime()) {
-      if (block.endAt.getTime() > current.endAt.getTime()) {
-        current.endAt = block.endAt;
-      }
-      continue;
-    }
-
-    merged.push({ startAt: block.startAt, endAt: block.endAt });
-  }
-
-  return merged;
+  return mergeTimeBlocks(blocks);
 }
 
 function buildFreeSlots(
@@ -224,7 +197,7 @@ function buildFreeSlots(
         endAt: block.startAt
       };
 
-      if (getDurationMinutes(slot.startAt, slot.endAt) >= MINIMUM_USEFUL_DURATION_MINUTES) {
+      if (getBlockDurationMinutes(slot.startAt, slot.endAt) >= MINIMUM_USEFUL_DURATION_MINUTES) {
         freeSlots.push(slot);
       }
     }
@@ -240,7 +213,7 @@ function buildFreeSlots(
       endAt: availabilityEnd
     };
 
-    if (getDurationMinutes(trailingSlot.startAt, trailingSlot.endAt) >= MINIMUM_USEFUL_DURATION_MINUTES) {
+    if (getBlockDurationMinutes(trailingSlot.startAt, trailingSlot.endAt) >= MINIMUM_USEFUL_DURATION_MINUTES) {
       freeSlots.push(trailingSlot);
     }
   }
@@ -327,9 +300,13 @@ async function getSuggestionForUser(userId: string, suggestionId: string) {
 async function ensureNoAcceptanceConflicts(
   db: Prisma.TransactionClient,
   userId: string,
-  suggestion: TaskSuggestion
+  suggestion: TaskSuggestion,
+  timeZone: string
 ) {
-  const [conflictingSchedule, conflictingCalendarEvent] = await Promise.all([
+  const localDate = getDateStringForInstantInTimeZone(suggestion.startAt, timeZone);
+  const weekday = getWeekdayFromDateString(localDate);
+
+  const [conflictingSchedule, conflictingCalendarEvent, routines] = await Promise.all([
     db.taskSchedule.findFirst({
       where: {
         userId,
@@ -363,10 +340,31 @@ async function ensureNoAcceptanceConflicts(
       select: {
         id: true
       }
+    }),
+    db.routine.findMany({
+      where: {
+        userId,
+        isActive: true,
+        daysOfWeek: {
+          has: weekday
+        }
+      },
+      select: {
+        startTime: true,
+        endTime: true
+      },
+      orderBy: [{ startTime: "asc" }]
     })
   ]);
 
-  if (conflictingSchedule || conflictingCalendarEvent) {
+  const conflictingRoutine = routines.find((routine) => {
+    const startAt = getUtcInstantForLocalTime(localDate, routine.startTime, timeZone);
+    const endAt = getUtcInstantForLocalTime(localDate, routine.endTime, timeZone);
+
+    return startAt.getTime() < suggestion.endAt.getTime() && endAt.getTime() > suggestion.startAt.getTime();
+  });
+
+  if (conflictingSchedule || conflictingCalendarEvent || conflictingRoutine) {
     throw new AppError(409, "CONFLICT", "Suggestion conflicts with an occupied block");
   }
 }
@@ -800,7 +798,7 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
       );
 
       for (const slot of freeSlots) {
-        if (getDurationMinutes(slot.startAt, slot.endAt) < task.durationMinutes) {
+        if (getBlockDurationMinutes(slot.startAt, slot.endAt) < task.durationMinutes) {
           continue;
         }
 
@@ -885,6 +883,7 @@ export async function acceptSuggestion(
   suggestionId: string
 ): Promise<AcceptSuggestionResult> {
   console.info("accept_suggestion", { userId, suggestionId });
+  const timeZone = await getUserTimeZone(userId);
 
   const { schedule, task } = await prisma.$transaction(async (tx) => {
     const suggestion = await tx.taskSuggestion.findFirst({
@@ -938,7 +937,7 @@ export async function acceptSuggestion(
     });
 
     if (!schedule) {
-      await ensureNoAcceptanceConflicts(tx, userId, suggestion);
+      await ensureNoAcceptanceConflicts(tx, userId, suggestion, timeZone);
 
       try {
         schedule = await tx.taskSchedule.create({

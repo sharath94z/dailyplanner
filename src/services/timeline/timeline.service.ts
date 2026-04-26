@@ -11,11 +11,15 @@ import {
 
 import type {
   TimelineItem,
-  TimelineResult,
-  TimelineSummary
+  TimelineResult
 } from "../../features/timeline/types";
 import { prisma } from "../../lib/db";
 import { getDayWindowForDate, getUtcInstantForLocalTime, getWeekdayFromDateString } from "../../lib/planner-time";
+import {
+  getBlockDurationMinutes,
+  getMergedBlockDurationMinutes,
+  type TimeBlock
+} from "../../lib/time-blocks";
 import { getUserTimeZone } from "../../lib/user-timezone";
 import type { TimelineQuery } from "../../lib/validators/timeline";
 import { reconcileMissedSchedulesForDay } from "../schedules/schedule.service";
@@ -42,10 +46,6 @@ type SuggestionWithTask = TaskSuggestion & {
 
 function toIso(value: Date): string {
   return value.toISOString();
-}
-
-function getDurationMinutes(startAt: Date, endAt: Date): number {
-  return Math.max(0, Math.round((endAt.getTime() - startAt.getTime()) / 60000));
 }
 
 function serializeCalendarEvent(event: CalendarEvent): TimelineItem {
@@ -99,6 +99,17 @@ function serializeSuggestion(suggestion: SuggestionWithTask): TimelineItem {
     endAt: toIso(suggestion.endAt),
     state: suggestion.status
   };
+}
+
+function getRoutineBlocks(
+  routines: Array<{ startTime: string; endTime: string }>,
+  date: string,
+  timeZone: string
+): TimeBlock[] {
+  return routines.map((routine) => ({
+    startAt: getUtcInstantForLocalTime(date, routine.startTime, timeZone),
+    endAt: getUtcInstantForLocalTime(date, routine.endTime, timeZone)
+  }));
 }
 
 function sortTimelineItems(items: TimelineItem[]): TimelineItem[] {
@@ -216,26 +227,19 @@ export async function getTimelineForDate(
     ...schedules.map(serializeSchedule),
     ...suggestions.map(serializeSuggestion)
   ]);
+  const routineBlocks = getRoutineBlocks(routines, input.date, timeZone);
 
   const busyMinutes = calendarEvents.reduce(
-    (total, event) => total + getDurationMinutes(event.startAt, event.endAt),
+    (total, event) => total + getBlockDurationMinutes(event.startAt, event.endAt),
     0
   );
-  const routineMinutes = routines.reduce(
-    (total, routine) =>
-      total +
-      getDurationMinutes(
-        getUtcInstantForLocalTime(input.date, routine.startTime, timeZone),
-        getUtcInstantForLocalTime(input.date, routine.endTime, timeZone)
-      ),
-    0
-  );
+  const routineMinutes = getMergedBlockDurationMinutes(routineBlocks);
   const scheduledMinutes = schedules.reduce(
-    (total, schedule) => total + getDurationMinutes(schedule.startAt, schedule.endAt),
+    (total, schedule) => total + getBlockDurationMinutes(schedule.startAt, schedule.endAt),
     0
   );
   const suggestedMinutes = suggestions.reduce(
-    (total, suggestion) => total + getDurationMinutes(suggestion.startAt, suggestion.endAt),
+    (total, suggestion) => total + getBlockDurationMinutes(suggestion.startAt, suggestion.endAt),
     0
   );
   const dailyCapacity = preferences?.maxDailyPlannedMinutes ?? DEFAULT_DAILY_FREE_MINUTES;
