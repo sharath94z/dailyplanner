@@ -24,6 +24,7 @@ import {
 import { getBlockDurationMinutes, mergeTimeBlocks, type TimeBlock } from "../../lib/time-blocks";
 import { getUserTimeZone } from "../../lib/user-timezone";
 import type { PlanDayInput } from "../../lib/validators/suggestions";
+import { reconcileStaleSuggestionsForDay } from "../schedules/schedule.service";
 
 const DEFAULT_WORKDAY_START = "09:00";
 const DEFAULT_WORKDAY_END = "18:00";
@@ -635,6 +636,7 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
   const dayWindow = getDayWindowForDate(date, timeZone);
   const weekday = getWeekdayFromDateString(date);
 
+  await reconcileStaleSuggestionsForDay(userId, dayWindow.dayStartUtc, dayWindow.dayEndUtc);
   await refreshActiveSuggestionsForDay(userId, dayWindow.dayStartUtc, dayWindow.dayEndUtc);
 
   const [preferencesRecord, candidateTasks, routines, activeSuggestions, taskSchedules, calendarEvents] =
