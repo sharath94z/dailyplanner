@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
+import { PlanDayButton } from "../planning/plan-day-button";
+import { TaskCreateForm } from "../tasks/task-create-form";
 import { createRoutine } from "../../lib/client-api/routines";
 import { completeSchedule } from "../../lib/client-api/schedules";
 import {
@@ -11,6 +13,7 @@ import {
   retrySuggestion
 } from "../../lib/client-api/suggestions";
 import { getUtcInstantForLocalTime } from "../../lib/planner-time";
+import type { SerializedTask } from "../../services/tasks/task.service";
 import type { TimelineItem, TimelineResult } from "./types";
 
 const PAGE_CONTAINER_STYLE = {
@@ -39,7 +42,9 @@ const WEEKDAY_OPTIONS = [
 
 type TimelineViewProps = {
   timeline: TimelineResult;
+  tasks: SerializedTask[];
   mockUserId: string;
+  selectedDate: string;
   timeZone: string;
 };
 
@@ -154,7 +159,13 @@ function getPendingLabel(action: Exclude<ItemAction, null>) {
   return "Dismissing...";
 }
 
-export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewProps) {
+export function TimelineView({
+  timeline,
+  tasks,
+  mockUserId,
+  selectedDate,
+  timeZone
+}: TimelineViewProps) {
   const router = useRouter();
   const [pendingItemKey, setPendingItemKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ItemAction>(null);
@@ -166,6 +177,10 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
   const [routineError, setRoutineError] = useState<string | null>(null);
   const [isCreatingRoutine, setIsCreatingRoutine] = useState(false);
   const [, startTransition] = useTransition();
+  const hasPlanningItems = timeline.items.some(
+    (item) => item.type === "task_schedule" || item.type === "task_suggestion"
+  );
+  const openTasks = tasks.filter((task) => task.status !== "COMPLETED" && task.status !== "ARCHIVED");
 
   function toggleSelectedDay(day: number) {
     setSelectedDays((current) =>
@@ -283,6 +298,14 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
     setIsCreatingRoutine(false);
   }
 
+  function handleDateChange(nextDate: string) {
+    if (!nextDate) {
+      return;
+    }
+
+    router.replace(`/?date=${encodeURIComponent(nextDate)}`, { scroll: false });
+  }
+
   return (
     <main style={PAGE_CONTAINER_STYLE}>
       <section style={{ marginBottom: "1.5rem" }}>
@@ -303,6 +326,110 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
           {formatDateLabel(timeline.date, timeZone)}
         </p>
       </section>
+
+      <section
+        style={{
+          ...CARD_STYLE,
+          padding: "1rem",
+          marginBottom: "1rem"
+        }}
+      >
+        <label style={{ display: "grid", gap: "0.35rem" }}>
+          <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Selected date</span>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(event) => handleDateChange(event.target.value)}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "0.75rem",
+              padding: "0.65rem 0.8rem",
+              fontSize: "0.95rem",
+              backgroundColor: "#ffffff"
+            }}
+          />
+        </label>
+      </section>
+
+      <TaskCreateForm mockUserId={mockUserId} />
+
+      <section
+        style={{
+          ...CARD_STYLE,
+          padding: "1rem",
+          marginBottom: "1rem"
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "1rem"
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: "1rem" }}>Open tasks</h2>
+          <span style={{ fontSize: "0.875rem", color: "#6b7280" }}>{openTasks.length}</span>
+        </div>
+
+        {openTasks.length === 0 ? (
+          <p style={{ margin: 0, fontSize: "0.875rem", color: "#6b7280" }}>
+            No open tasks yet. Add a task to get started.
+          </p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+            {openTasks.map((task) => (
+              <article
+                key={task.id}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: "0.85rem",
+                  padding: "0.8rem",
+                  backgroundColor: "#f9fafb"
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                    gap: "0.75rem"
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "0.75rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                        color: "#6b7280"
+                      }}
+                    >
+                      {task.status}
+                    </div>
+                    <div
+                      style={{
+                        marginTop: "0.2rem",
+                        fontSize: "0.95rem",
+                        fontWeight: 700,
+                        wordBreak: "break-word"
+                      }}
+                    >
+                      {task.title}
+                    </div>
+                  </div>
+                  <div style={{ flexShrink: 0, fontSize: "0.8rem", color: "#4b5563", textAlign: "right" }}>
+                    <div>{task.priority}</div>
+                    {task.durationMinutes ? <div>{task.durationMinutes}m</div> : null}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <PlanDayButton mockUserId={mockUserId} selectedDate={selectedDate} />
 
       <section
         style={{
@@ -506,7 +633,7 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
               backgroundColor: "#f9fafb"
             }}
           >
-            No timeline items for this day yet.
+            Nothing is planned for this day yet. Add a task, create a routine, or click Plan My Day.
           </div>
         ) : (
           <div
@@ -733,6 +860,23 @@ export function TimelineView({ timeline, mockUserId, timeZone }: TimelineViewPro
             })}
           </div>
         )}
+
+        {!hasPlanningItems ? (
+          <div
+            style={{
+              marginTop: "1rem",
+              border: "1px dashed #d1d5db",
+              borderRadius: "0.9rem",
+              padding: "0.9rem",
+              color: "#6b7280",
+              backgroundColor: "#f9fafb",
+              fontSize: "0.875rem"
+            }}
+          >
+            No tasks or suggestions are on the timeline for this day yet. Add a task, then run Plan
+            My Day when you want suggestions.
+          </div>
+        ) : null}
       </section>
     </main>
   );
