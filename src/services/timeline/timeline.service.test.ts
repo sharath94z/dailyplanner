@@ -6,12 +6,17 @@ vi.mock("../../lib/db", () => ({
   prisma: prismaMock
 }));
 
-const { reconcileMissedSchedulesForDay } = vi.hoisted(() => ({
-  reconcileMissedSchedulesForDay: vi.fn()
+const {
+  reconcileMissedSchedulesForDay,
+  reconcileStaleSuggestionsForDay
+} = vi.hoisted(() => ({
+  reconcileMissedSchedulesForDay: vi.fn(),
+  reconcileStaleSuggestionsForDay: vi.fn()
 }));
 
 vi.mock("../schedules/schedule.service", () => ({
-  reconcileMissedSchedulesForDay
+  reconcileMissedSchedulesForDay,
+  reconcileStaleSuggestionsForDay
 }));
 
 import { getTimelineForDate } from "./timeline.service";
@@ -20,12 +25,14 @@ describe("timeline.service", () => {
   beforeEach(() => {
     resetPrismaMock();
     reconcileMissedSchedulesForDay.mockReset();
+    reconcileStaleSuggestionsForDay.mockReset();
     prismaMock.user.findUnique.mockResolvedValue({
       timezone: "Asia/Tokyo"
     });
     prismaMock.userPreferences.findUnique.mockResolvedValue({
       maxDailyPlannedMinutes: 360
     });
+    prismaMock.routine.findMany.mockResolvedValue([]);
     prismaMock.taskSchedule.findMany.mockResolvedValue([]);
     prismaMock.taskSuggestion.findMany.mockResolvedValue([]);
     prismaMock.calendarEvent.findMany.mockResolvedValue([]);
@@ -99,5 +106,28 @@ describe("timeline.service", () => {
     expect(timeline.items.filter((item) => item.type === "routine")).toHaveLength(2);
     expect(timeline.summary.routineMinutes).toBe(90);
     expect(timeline.summary.freeMinutes).toBe(270);
+  });
+
+  it("reconciles stale suggestions before loading a later-day timeline", async () => {
+    await getTimelineForDate("mock-user", {
+      date: "2026-04-30",
+      includeSuggestions: true,
+      includeCalendar: true
+    });
+
+    expect(reconcileStaleSuggestionsForDay).toHaveBeenCalledWith(
+      "mock-user",
+      expect.any(Date),
+      expect.any(Date)
+    );
+    expect(reconcileMissedSchedulesForDay).toHaveBeenCalledWith(
+      "mock-user",
+      expect.any(Date),
+      expect.any(Date),
+      expect.any(Date)
+    );
+    expect(reconcileStaleSuggestionsForDay.mock.invocationCallOrder[0]).toBeLessThan(
+      reconcileMissedSchedulesForDay.mock.invocationCallOrder[0]
+    );
   });
 });

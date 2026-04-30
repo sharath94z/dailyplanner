@@ -159,6 +159,48 @@ describe("scheduler.service", () => {
     expect(result.suggestions[0]?.id).toBe("fresh-suggestion");
   });
 
+  it("re-suggests a task recovered from a stale prior-day suggestion", async () => {
+    prismaMock.taskSuggestion.findMany
+      .mockResolvedValueOnce([
+        {
+          taskId: "task-1"
+        }
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    prismaMock.task.findMany.mockResolvedValue([
+      {
+        id: "task-1",
+        status: TaskStatus.UNSCHEDULED,
+        deadline: null,
+        durationMinutes: 30,
+        createdAt: new Date("2026-04-20T00:00:00.000Z")
+      }
+    ]);
+    prismaMock.taskSuggestion.create.mockImplementation(createdSuggestionFromData("suggestion-1"));
+
+    const result = await planDay("mock-user", {
+      date: "2026-04-30"
+    });
+
+    expect(prismaMock.taskSuggestion.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: "mock-user",
+          status: SuggestionStatus.ACTIVE,
+          date: {
+            lt: new Date("2026-04-29T15:00:00.000Z")
+          }
+        }),
+        data: {
+          status: SuggestionStatus.EXPIRED
+        }
+      })
+    );
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]?.taskId).toBe("task-1");
+  });
+
   it("does not place suggestions on top of routines", async () => {
     prismaMock.routine.findMany.mockResolvedValue([
       {

@@ -269,3 +269,80 @@ export async function reconcileMissedSchedulesForDay(
     });
   }
 }
+
+export async function reconcileStaleSuggestionsForDay(
+  userId: string,
+  dayStart: Date,
+  _dayEnd: Date
+) {
+  const staleSuggestions = await prisma.taskSuggestion.findMany({
+    where: {
+      userId,
+      status: SuggestionStatus.ACTIVE,
+      date: {
+        lt: dayStart
+      }
+    },
+    select: {
+      taskId: true
+    }
+  });
+
+  if (staleSuggestions.length === 0) {
+    return;
+  }
+
+  const affectedTaskIds = [...new Set(staleSuggestions.map((suggestion) => suggestion.taskId))];
+
+  await prisma.$transaction(async (tx) => {
+    await tx.taskSuggestion.updateMany({
+      where: {
+        userId,
+        status: SuggestionStatus.ACTIVE,
+        date: {
+          lt: dayStart
+        }
+      },
+      data: {
+        status: SuggestionStatus.EXPIRED
+      }
+    });
+
+    const remainingActiveSuggestions = await tx.taskSuggestion.findMany({
+      where: {
+        userId,
+        taskId: {
+          in: affectedTaskIds
+        },
+        status: SuggestionStatus.ACTIVE
+      },
+      select: {
+        taskId: true
+      }
+    });
+
+    const remainingActiveTaskIds = new Set(
+      remainingActiveSuggestions.map((suggestion) => suggestion.taskId)
+    );
+    const recoverableTaskIds = affectedTaskIds.filter(
+      (taskId) => !remainingActiveTaskIds.has(taskId)
+    );
+
+    if (recoverableTaskIds.length === 0) {
+      return;
+    }
+
+    await tx.task.updateMany({
+      where: {
+        userId,
+        id: {
+          in: recoverableTaskIds
+        },
+        status: TaskStatus.SUGGESTED
+      },
+      data: {
+        status: TaskStatus.UNSCHEDULED
+      }
+    });
+  });
+}

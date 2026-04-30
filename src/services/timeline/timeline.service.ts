@@ -22,7 +22,10 @@ import {
 } from "../../lib/time-blocks";
 import { getUserTimeZone } from "../../lib/user-timezone";
 import type { TimelineQuery } from "../../lib/validators/timeline";
-import { reconcileMissedSchedulesForDay } from "../schedules/schedule.service";
+import {
+  reconcileMissedSchedulesForDay,
+  reconcileStaleSuggestionsForDay
+} from "../schedules/schedule.service";
 
 const DEFAULT_DAILY_FREE_MINUTES = 360;
 const ITEM_TYPE_PRIORITY = {
@@ -142,6 +145,7 @@ export async function getTimelineForDate(
   const dayWindow = getDayWindowForDate(input.date, timeZone);
   const weekday = getWeekdayFromDateString(input.date);
 
+  await reconcileStaleSuggestionsForDay(userId, dayWindow.dayStartUtc, dayWindow.dayEndUtc);
   await reconcileMissedSchedulesForDay(
     userId,
     dayWindow.dayStartUtc,

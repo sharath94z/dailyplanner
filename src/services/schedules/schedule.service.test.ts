@@ -8,11 +8,18 @@ vi.mock("../../lib/db", () => ({
   prisma: prismaMock
 }));
 
-import { completeSchedule, markScheduleMissed } from "./schedule.service";
+import {
+  completeSchedule,
+  markScheduleMissed,
+  reconcileStaleSuggestionsForDay
+} from "./schedule.service";
 
 describe("schedule.service", () => {
   beforeEach(() => {
     resetPrismaMock();
+    prismaMock.taskSuggestion.findMany.mockResolvedValue([]);
+    prismaMock.taskSuggestion.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.task.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it("completeSchedule marks the schedule COMPLETED and task COMPLETED", async () => {
@@ -96,5 +103,73 @@ describe("schedule.service", () => {
       status: 409,
       code: "INVALID_STATE"
     });
+  });
+
+  it("expires stale prior-day ACTIVE suggestions and restores the task to UNSCHEDULED", async () => {
+    prismaMock.taskSuggestion.findMany
+      .mockResolvedValueOnce([
+        {
+          taskId: "task-1"
+        }
+      ])
+      .mockResolvedValueOnce([]);
+
+    await reconcileStaleSuggestionsForDay(
+      "mock-user",
+      new Date("2026-04-30T00:00:00.000Z"),
+      new Date("2026-05-01T00:00:00.000Z")
+    );
+
+    expect(prismaMock.taskSuggestion.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: "mock-user",
+          status: SuggestionStatus.ACTIVE,
+          date: {
+            lt: new Date("2026-04-30T00:00:00.000Z")
+          }
+        }),
+        data: {
+          status: SuggestionStatus.EXPIRED
+        }
+      })
+    );
+    expect(prismaMock.task.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: "mock-user",
+          id: {
+            in: ["task-1"]
+          },
+          status: TaskStatus.SUGGESTED
+        }),
+        data: {
+          status: TaskStatus.UNSCHEDULED
+        }
+      })
+    );
+  });
+
+  it("preserves a task when another ACTIVE suggestion remains", async () => {
+    prismaMock.taskSuggestion.findMany
+      .mockResolvedValueOnce([
+        {
+          taskId: "task-1"
+        }
+      ])
+      .mockResolvedValueOnce([
+        {
+          taskId: "task-1"
+        }
+      ]);
+
+    await reconcileStaleSuggestionsForDay(
+      "mock-user",
+      new Date("2026-04-30T00:00:00.000Z"),
+      new Date("2026-05-01T00:00:00.000Z")
+    );
+
+    expect(prismaMock.taskSuggestion.updateMany).toHaveBeenCalled();
+    expect(prismaMock.task.updateMany).not.toHaveBeenCalled();
   });
 });
