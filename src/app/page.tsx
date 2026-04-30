@@ -6,6 +6,7 @@ import { getTodayDateStringInTimeZone } from "../lib/planner-time";
 import { getUserTimeZone } from "../lib/user-timezone";
 import { timelineQuerySchema } from "../lib/validators/timeline";
 import { getTimelineForDate } from "../services/timeline/timeline.service";
+import { listTasks } from "../services/tasks/task.service";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     includeSuggestions: true,
     includeCalendar: true
   });
+  const tasks = await listTasks(userId, {
+    limit: 10,
+    includeArchived: false
+  });
 
-  return <TimelineView timeline={timeline} mockUserId={userId} timeZone={timeZone} />;
+  return (
+    <TimelineView
+      timeline={timeline}
+      tasks={tasks.tasks}
+      mockUserId={userId}
+      selectedDate={selectedDate}
+      timeZone={timeZone}
+    />
+  );
 }
