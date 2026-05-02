@@ -7,9 +7,13 @@ import { prismaMock, resetPrismaMock } from "../../test/prisma-mock";
 vi.mock("../../lib/db", () => ({
   prisma: prismaMock
 }));
+vi.mock("../../lib/user-timezone", () => ({
+  getUserTimeZone: vi.fn().mockResolvedValue("Asia/Tokyo")
+}));
 
 import {
   completeSchedule,
+  createTaskSchedule,
   markScheduleMissed,
   reconcileStaleSuggestionsForDay
 } from "./schedule.service";
@@ -18,7 +22,20 @@ describe("schedule.service", () => {
   beforeEach(() => {
     resetPrismaMock();
     prismaMock.taskSuggestion.findMany.mockResolvedValue([]);
+    prismaMock.taskSuggestion.findFirst.mockResolvedValue(null);
     prismaMock.taskSuggestion.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.task.create.mockImplementation(async ({ data }) => ({
+      id: "task-created",
+      title: data.title,
+      status: data.status
+    }));
+    prismaMock.taskSchedule.create.mockImplementation(async ({ data }) => ({
+      id: "schedule-created",
+      ...data
+    }));
+    prismaMock.taskSchedule.findFirst.mockResolvedValue(null);
+    prismaMock.calendarEvent.findFirst.mockResolvedValue(null);
+    prismaMock.routine.findMany.mockResolvedValue([]);
     prismaMock.task.updateMany.mockResolvedValue({ count: 1 });
   });
 
@@ -171,5 +188,63 @@ describe("schedule.service", () => {
 
     expect(prismaMock.taskSuggestion.updateMany).toHaveBeenCalled();
     expect(prismaMock.task.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("createTaskSchedule creates a task and schedule and marks the task SCHEDULED", async () => {
+    const result = await createTaskSchedule("mock-user", {
+      title: "Doctor appointment",
+      date: "2026-05-05",
+      startTime: "09:30",
+      durationMinutes: 45
+    });
+
+    expect(prismaMock.task.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "mock-user",
+        title: "Doctor appointment",
+        status: TaskStatus.SCHEDULED
+      })
+    });
+    expect(prismaMock.taskSchedule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        taskId: "task-created",
+        userId: "mock-user",
+        completionStatus: CompletionStatus.PENDING
+      })
+    });
+    expect(result.task.status).toBe("SCHEDULED");
+    expect(result.schedule.completionStatus).toBe("PENDING");
+  });
+
+  it("createTaskSchedule rejects schedules that cross into the next day", async () => {
+    await expect(
+      createTaskSchedule("mock-user", {
+        title: "Late block",
+        date: "2026-05-05",
+        startTime: "23:30",
+        durationMinutes: 90
+      })
+    ).rejects.toMatchObject<AppError>({
+      status: 400,
+      code: "VALIDATION_ERROR"
+    });
+  });
+
+  it("createTaskSchedule rejects occupied overlaps", async () => {
+    prismaMock.taskSchedule.findFirst.mockResolvedValue({
+      id: "existing-schedule"
+    });
+
+    await expect(
+      createTaskSchedule("mock-user", {
+        title: "Overlap",
+        date: "2026-05-05",
+        startTime: "10:00",
+        durationMinutes: 30
+      })
+    ).rejects.toMatchObject<AppError>({
+      status: 409,
+      code: "CONFLICT"
+    });
   });
 });

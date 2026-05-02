@@ -1,56 +1,19 @@
-import { headers } from "next/headers";
-
-import { TimelineView } from "../features/timeline/timeline-view";
-import { resolveMockUserId } from "../lib/auth";
-import { getTodayDateStringInTimeZone } from "../lib/planner-time";
-import { getUserTimeZone } from "../lib/user-timezone";
-import { timelineQuerySchema } from "../lib/validators/timeline";
-import { getTimelineForDate } from "../services/timeline/timeline.service";
-import { listTasks } from "../services/tasks/task.service";
-
-export const dynamic = "force-dynamic";
-
-function normalizeSelectedDate(rawDate: string | string[] | undefined, fallbackDate: string): string {
-  const candidate = typeof rawDate === "string" ? rawDate : undefined;
-  const parsed = timelineQuerySchema.safeParse({
-    date: candidate ?? fallbackDate
-  });
-
-  return parsed.success ? parsed.data.date : fallbackDate;
-}
+import { redirect } from "next/navigation"
 
 type HomePageProps = {
   searchParams?: Promise<{
-    date?: string | string[];
-  }>;
-};
+    date?: string | string[]
+  }>
+}
 
 export default async function HomePage({ searchParams }: HomePageProps) {
-  const headerStore = await headers();
-  const userId = await resolveMockUserId(headerStore.get("x-mock-user-id"));
-  const timeZone = await getUserTimeZone(userId);
-  const resolvedSearchParams = searchParams ? await searchParams : undefined;
-  const selectedDate = normalizeSelectedDate(
-    resolvedSearchParams?.date,
-    getTodayDateStringInTimeZone(timeZone)
-  );
-  const timeline = await getTimelineForDate(userId, {
-    date: selectedDate,
-    includeSuggestions: true,
-    includeCalendar: true
-  });
-  const tasks = await listTasks(userId, {
-    limit: 10,
-    includeArchived: false
-  });
+  const resolvedSearchParams = searchParams ? await searchParams : undefined
+  const selectedDate =
+    typeof resolvedSearchParams?.date === "string" ? resolvedSearchParams.date : undefined
 
-  return (
-    <TimelineView
-      timeline={timeline}
-      tasks={tasks.tasks}
-      mockUserId={userId}
-      selectedDate={selectedDate}
-      timeZone={timeZone}
-    />
-  );
+  redirect(
+    selectedDate
+      ? `/timeline?date=${encodeURIComponent(selectedDate)}`
+      : "/timeline"
+  )
 }

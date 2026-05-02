@@ -1,11 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
+import { AddToTimelineSheet } from "./add-to-timeline-sheet";
+import { AppNav } from "../navigation/app-nav";
 import { PlanDayButton } from "../planning/plan-day-button";
-import { TaskCreateForm } from "../tasks/task-create-form";
-import { createRoutine } from "../../lib/client-api/routines";
 import { completeSchedule } from "../../lib/client-api/schedules";
 import {
   acceptSuggestion,
@@ -19,7 +20,7 @@ import type { TimelineItem, TimelineResult } from "./types";
 const PAGE_CONTAINER_STYLE = {
   margin: "0 auto",
   maxWidth: "42rem",
-  padding: "1rem 0.9rem 3rem",
+  padding: "1rem 0.9rem 6rem",
   fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   color: "#111827"
 } as const;
@@ -40,16 +41,6 @@ const FIELD_STYLE = {
   color: "#111827",
   width: "100%"
 } as const;
-
-const WEEKDAY_OPTIONS = [
-  { label: "Sun", value: 0 },
-  { label: "Mon", value: 1 },
-  { label: "Tue", value: 2 },
-  { label: "Wed", value: 3 },
-  { label: "Thu", value: 4 },
-  { label: "Fri", value: 5 },
-  { label: "Sat", value: 6 }
-] as const;
 
 const DEFAULT_DAY_START_HOUR = 8;
 const DEFAULT_DAY_END_HOUR = 20;
@@ -105,6 +96,25 @@ function formatHourLabel(hour: number) {
   const suffix = hour >= 12 ? "PM" : "AM";
   const normalizedHour = hour % 12 === 0 ? 12 : hour % 12;
   return `${normalizedHour} ${suffix}`;
+}
+
+function formatMinutesCompact(totalMinutes: number) {
+  if (totalMinutes <= 0) {
+    return "0m";
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+
+  return `${hours}h ${minutes}m`;
 }
 
 function getTimelineWindow(items: TimelineItem[], timeZone: string) {
@@ -223,7 +233,7 @@ function getItemLabel(item: TimelineItem): string {
   }
 
   if (item.type === "routine") {
-    return "Routine";
+    return "Repeats";
   }
 
   if (item.type === "task_schedule") {
@@ -268,17 +278,11 @@ export function TimelineView({
   const [pendingItemKey, setPendingItemKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ItemAction>(null);
   const [errorByItemKey, setErrorByItemKey] = useState<Record<string, string>>({});
-  const [routineTitle, setRoutineTitle] = useState("");
-  const [routineStartTime, setRoutineStartTime] = useState("09:00");
-  const [routineEndTime, setRoutineEndTime] = useState("10:00");
-  const [selectedDays, setSelectedDays] = useState<number[]>([]);
-  const [routineError, setRoutineError] = useState<string | null>(null);
-  const [isCreatingRoutine, setIsCreatingRoutine] = useState(false);
   const [, startTransition] = useTransition();
-  const hasPlanningItems = timeline.items.some(
-    (item) => item.type === "task_schedule" || item.type === "task_suggestion"
-  );
   const openTasks = tasks.filter((task) => task.status !== "COMPLETED" && task.status !== "ARCHIVED");
+  const unscheduledDurationMinutes = tasks
+    .filter((task) => task.status === "UNSCHEDULED" || task.status === "MISSED")
+    .reduce((total, task) => total + (task.durationMinutes ?? 0), 0);
   const timelineWindow = getTimelineWindow(timeline.items, timeZone);
   const railHours = Array.from(
     { length: timelineWindow.endHour - timelineWindow.startHour + 1 },
@@ -286,12 +290,6 @@ export function TimelineView({
   );
   const windowStartMinutes = timelineWindow.startHour * MINUTES_PER_HOUR;
   const timelineHeight = (timelineWindow.endHour - timelineWindow.startHour) * PIXELS_PER_HOUR;
-
-  function toggleSelectedDay(day: number) {
-    setSelectedDays((current) =>
-      current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort()
-    );
-  }
 
   async function handleSuggestionAction(
     item: TimelineItem,
@@ -373,42 +371,12 @@ export function TimelineView({
     }
   }
 
-  async function handleCreateRoutine() {
-    setRoutineError(null);
-    setIsCreatingRoutine(true);
-
-    try {
-      await createRoutine({
-        mockUserId,
-        title: routineTitle,
-        startTime: routineStartTime,
-        endTime: routineEndTime,
-        daysOfWeek: selectedDays
-      });
-
-      setRoutineTitle("");
-      setRoutineStartTime("09:00");
-      setRoutineEndTime("10:00");
-      setSelectedDays([]);
-
-      startTransition(() => {
-        router.refresh();
-      });
-    } catch (error) {
-      setRoutineError(error instanceof Error ? error.message : "Request failed");
-      setIsCreatingRoutine(false);
-      return;
-    }
-
-    setIsCreatingRoutine(false);
-  }
-
   function handleDateChange(nextDate: string) {
     if (!nextDate) {
       return;
     }
 
-    router.replace(`/?date=${encodeURIComponent(nextDate)}`, { scroll: false });
+    router.replace(`/timeline?date=${encodeURIComponent(nextDate)}`, { scroll: false });
   }
 
   return (
@@ -423,7 +391,7 @@ export function TimelineView({
         }}
       >
         <div style={{ display: "grid", gap: "0.8rem", marginBottom: "0.8rem" }}>
-          <div>
+          <div style={{ display: "grid", gap: "0.45rem" }}>
             <p
               style={{
                 margin: 0,
@@ -434,14 +402,39 @@ export function TimelineView({
                 color: "#2563eb"
               }}
             >
-              Daily planner
+              Timeline
             </p>
             <h1 style={{ margin: "0.3rem 0 0", fontSize: "1.75rem", lineHeight: 1.05 }}>
               {formatDateLabel(timeline.date, timeZone)}
             </h1>
             <p style={{ margin: "0.4rem 0 0", fontSize: "0.9rem", color: "#475569" }}>
-              Plan the day, review fixed blocks, and keep suggestions moving.
+              What does your day look like?
             </p>
+            <div
+              style={{
+                display: "inline-flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "0.45rem",
+                fontSize: "0.85rem",
+                color: "#475569"
+              }}
+            >
+              <span>
+                {openTasks.length} open task{openTasks.length === 1 ? "" : "s"} ·{" "}
+                {formatMinutesCompact(unscheduledDurationMinutes)} unscheduled
+              </span>
+              <Link
+                href={`/todos?date=${encodeURIComponent(selectedDate)}`}
+                style={{
+                  textDecoration: "none",
+                  color: "#1d4ed8",
+                  fontWeight: 700
+                }}
+              >
+                View Todo
+              </Link>
+            </div>
           </div>
 
           <div
@@ -475,10 +468,7 @@ export function TimelineView({
           </div>
         </div>
 
-        <div style={{ display: "grid", gap: "0.75rem" }}>
-          <PlanDayButton mockUserId={mockUserId} selectedDate={selectedDate} />
-          <TaskCreateForm mockUserId={mockUserId} />
-        </div>
+        <PlanDayButton mockUserId={mockUserId} selectedDate={selectedDate} />
       </section>
 
       <section
@@ -499,7 +489,7 @@ export function TimelineView({
           <div>
             <h2 style={{ margin: 0, fontSize: "1rem" }}>Timeline</h2>
             <p style={{ margin: "0.3rem 0 0", fontSize: "0.85rem", color: "#6b7280" }}>
-              Your day at a glance, with fixed blocks, scheduled work, suggestions, and calendar time.
+              Scheduled tasks, suggestions, repeating blocks, and calendar time.
             </p>
           </div>
           <span
@@ -527,7 +517,8 @@ export function TimelineView({
               fontSize: "0.95rem"
             }}
           >
-            Nothing planned yet. Add a task, then tap Plan My Day.
+            <div style={{ fontWeight: 700, color: "#334155" }}>Nothing scheduled yet</div>
+            <div style={{ marginTop: "0.3rem" }}>Add tasks in Todo or Plan My Day.</div>
           </div>
         ) : (
           <div
@@ -805,301 +796,9 @@ export function TimelineView({
           </div>
         )}
 
-        {!hasPlanningItems && timeline.items.length > 0 ? (
-          <div
-            style={{
-              marginTop: "1rem",
-              border: "1px dashed #d6d3d1",
-              borderRadius: "1rem",
-              padding: "0.95rem",
-              color: "#57534e",
-              backgroundColor: "#fafaf9",
-              fontSize: "0.875rem"
-            }}
-          >
-            No tasks or suggestions are on the timeline for this day yet. Add a task, then run Plan
-            My Day when you want suggestions.
-          </div>
-        ) : null}
       </section>
-
-      <section
-        style={{
-          ...SURFACE_STYLE,
-          padding: "1rem",
-          marginBottom: "1rem"
-        }}
-      >
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "0.7rem"
-          }}
-        >
-          {[
-            { label: "Busy", value: timeline.summary.busyMinutes, tint: "#f5f5f4" },
-            { label: "Routine", value: timeline.summary.routineMinutes, tint: "#ecfeff" },
-            { label: "Scheduled", value: timeline.summary.scheduledMinutes, tint: "#f3f4f6" },
-            { label: "Suggested", value: timeline.summary.suggestedMinutes, tint: "#eff6ff" },
-            { label: "Free", value: timeline.summary.freeMinutes, tint: "#fef3c7" }
-          ].map((summary) => (
-            <div
-              key={summary.label}
-              style={{
-                borderRadius: "1rem",
-                border: "1px solid #ece7e1",
-                backgroundColor: summary.tint,
-                padding: "0.75rem 0.8rem"
-              }}
-            >
-              <div
-                style={{
-                  fontSize: "0.7rem",
-                  color: "#6b7280",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em"
-                }}
-              >
-                {summary.label}
-              </div>
-              <div style={{ marginTop: "0.22rem", fontSize: "1.2rem", fontWeight: 800 }}>
-                {summary.value}m
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section
-        style={{
-          ...SURFACE_STYLE,
-          padding: "1rem",
-          marginBottom: "1rem"
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: "1rem"
-          }}
-        >
-          <div>
-            <h2 style={{ margin: 0, fontSize: "1rem" }}>Open tasks</h2>
-            <p style={{ margin: "0.3rem 0 0", fontSize: "0.85rem", color: "#6b7280" }}>
-              Tasks waiting to be planned or finished.
-            </p>
-          </div>
-          <span
-            style={{
-              borderRadius: "999px",
-              backgroundColor: "#f5f5f4",
-              border: "1px solid #e7e5e4",
-              padding: "0.35rem 0.65rem",
-              fontSize: "0.82rem",
-              color: "#57534e"
-            }}
-          >
-            {openTasks.length}
-          </span>
-        </div>
-
-        {openTasks.length === 0 ? (
-          <p style={{ margin: 0, fontSize: "0.875rem", color: "#6b7280" }}>
-            No open tasks yet. Add a task to get started.
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
-            {openTasks.map((task) => (
-              <article
-                key={task.id}
-                style={{
-                  border: "1px solid #ece7e1",
-                  borderRadius: "1rem",
-                  padding: "0.85rem",
-                  backgroundColor: "#fcfcfb"
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    justifyContent: "space-between",
-                    gap: "0.75rem"
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        borderRadius: "999px",
-                        backgroundColor: "#f5f5f4",
-                        border: "1px solid #e7e5e4",
-                        padding: "0.2rem 0.5rem",
-                        fontSize: "0.72rem",
-                        letterSpacing: "0.04em",
-                        textTransform: "uppercase",
-                        color: "#57534e"
-                      }}
-                    >
-                      {task.status}
-                    </div>
-                    <div
-                      style={{
-                        marginTop: "0.45rem",
-                        fontSize: "0.98rem",
-                        fontWeight: 700,
-                        wordBreak: "break-word"
-                      }}
-                    >
-                      {task.title}
-                    </div>
-                  </div>
-                  <div style={{ flexShrink: 0, fontSize: "0.8rem", color: "#57534e", textAlign: "right" }}>
-                    <div>{task.priority}</div>
-                    {task.durationMinutes ? <div>{task.durationMinutes}m</div> : null}
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <details
-        style={{
-          ...SURFACE_STYLE,
-          padding: "1rem",
-          marginBottom: "1rem"
-        }}
-      >
-        <summary
-          style={{
-            listStyle: "none",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.75rem"
-          }}
-        >
-          <div>
-            <h2 style={{ margin: 0, fontSize: "1rem" }}>Routines</h2>
-            <p style={{ margin: "0.3rem 0 0", fontSize: "0.85rem", color: "#6b7280" }}>
-              Add recurring blocks that stay fixed on the timeline.
-            </p>
-          </div>
-          <span
-            style={{
-              borderRadius: "999px",
-              border: "1px solid #99f6e4",
-              backgroundColor: "#ecfeff",
-              color: "#0f766e",
-              padding: "0.35rem 0.7rem",
-              fontSize: "0.82rem",
-              fontWeight: 600
-            }}
-          >
-            Add routine
-          </span>
-        </summary>
-
-        <div style={{ display: "grid", gap: "0.75rem", marginTop: "1rem" }}>
-          <label style={{ display: "grid", gap: "0.35rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Title</span>
-            <input
-              type="text"
-              value={routineTitle}
-              onChange={(event) => setRoutineTitle(event.target.value)}
-              placeholder="Lunch"
-              style={FIELD_STYLE}
-            />
-          </label>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.75rem" }}>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Start</span>
-              <input
-                type="time"
-                value={routineStartTime}
-                onChange={(event) => setRoutineStartTime(event.target.value)}
-                style={FIELD_STYLE}
-              />
-            </label>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>End</span>
-              <input
-                type="time"
-                value={routineEndTime}
-                onChange={(event) => setRoutineEndTime(event.target.value)}
-                style={FIELD_STYLE}
-              />
-            </label>
-          </div>
-
-          <div style={{ display: "grid", gap: "0.45rem" }}>
-            <span style={{ fontSize: "0.875rem", fontWeight: 600 }}>Days</span>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-              {WEEKDAY_OPTIONS.map((option) => (
-                <label
-                  key={option.value}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.35rem",
-                    border: "1px solid #d6d3d1",
-                    borderRadius: "999px",
-                    padding: "0.5rem 0.7rem",
-                    fontSize: "0.875rem",
-                    backgroundColor: selectedDays.includes(option.value) ? "#f0fdfa" : "#ffffff"
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedDays.includes(option.value)}
-                    onChange={() => toggleSelectedDay(option.value)}
-                  />
-                  {option.label}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <button
-              type="button"
-              onClick={handleCreateRoutine}
-              disabled={isCreatingRoutine}
-              style={{
-                borderRadius: "999px",
-                border: "1px solid #0f766e",
-                backgroundColor: "#0f766e",
-                color: "#ffffff",
-                padding: "0.7rem 1rem",
-                fontSize: "0.9rem",
-                fontWeight: 600,
-                opacity: isCreatingRoutine ? 0.7 : 1
-              }}
-            >
-              {isCreatingRoutine ? "Creating..." : "Create routine"}
-            </button>
-            {routineError ? (
-              <p
-                style={{
-                  margin: "0.65rem 0 0",
-                  fontSize: "0.875rem",
-                  color: "#b91c1c"
-                }}
-              >
-                {routineError}
-              </p>
-            ) : null}
-          </div>
-        </div>
-      </details>
+      <AddToTimelineSheet mockUserId={mockUserId} selectedDate={selectedDate} />
+      <AppNav selectedDate={selectedDate} />
     </main>
   );
 }

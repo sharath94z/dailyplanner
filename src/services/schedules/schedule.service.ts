@@ -2,12 +2,22 @@ import "server-only";
 
 import {
   CompletionStatus,
+  EffortLevel,
+  Priority,
   SuggestionStatus,
-  TaskStatus
+  TaskStatus,
+  TaskType
 } from "@prisma/client";
 
 import { AppError } from "../../lib/api-errors";
 import { prisma } from "../../lib/db";
+import {
+  getDateStringForInstantInTimeZone,
+  getUtcInstantForLocalTime,
+  getWeekdayFromDateString
+} from "../../lib/planner-time";
+import { getUserTimeZone } from "../../lib/user-timezone";
+import type { CreateTaskScheduleInput } from "../../lib/validators/task-schedule";
 
 const MISSED_GRACE_WINDOW_MINUTES = 10;
 
@@ -33,6 +43,22 @@ export type MarkScheduleMissedResult = {
     completionStatus: "MISSED";
   };
   suggestion: null;
+};
+
+export type CreateTaskScheduleResult = {
+  task: {
+    id: string;
+    status: "SCHEDULED";
+    title: string;
+  };
+  schedule: {
+    id: string;
+    taskId: string;
+    startAt: string;
+    endAt: string;
+    date: string;
+    completionStatus: "PENDING";
+  };
 };
 
 function getMissedCutoff(now: Date): Date {
@@ -65,6 +91,178 @@ function serializeMissedSchedule(taskId: string, scheduleId: string): MarkSchedu
     },
     suggestion: null
   };
+}
+
+function serializeCreatedTaskSchedule(input: {
+  taskId: string;
+  taskTitle: string;
+  scheduleId: string;
+  startAt: Date;
+  endAt: Date;
+  date: Date;
+}): CreateTaskScheduleResult {
+  return {
+    task: {
+      id: input.taskId,
+      status: "SCHEDULED",
+      title: input.taskTitle
+    },
+    schedule: {
+      id: input.scheduleId,
+      taskId: input.taskId,
+      startAt: input.startAt.toISOString(),
+      endAt: input.endAt.toISOString(),
+      date: input.date.toISOString(),
+      completionStatus: "PENDING"
+    }
+  };
+}
+
+async function ensureNoCreateScheduleConflicts(
+  userId: string,
+  date: string,
+  startAt: Date,
+  endAt: Date,
+  timeZone: string
+) {
+  const weekday = getWeekdayFromDateString(date);
+
+  const [conflictingSchedule, conflictingSuggestion, conflictingCalendarEvent, routines] = await Promise.all([
+    prisma.taskSchedule.findFirst({
+      where: {
+        userId,
+        startAt: {
+          lt: endAt
+        },
+        endAt: {
+          gt: startAt
+        }
+      },
+      select: {
+        id: true
+      }
+    }),
+    prisma.taskSuggestion.findFirst({
+      where: {
+        userId,
+        status: SuggestionStatus.ACTIVE,
+        startAt: {
+          lt: endAt
+        },
+        endAt: {
+          gt: startAt
+        }
+      },
+      select: {
+        id: true
+      }
+    }),
+    prisma.calendarEvent.findFirst({
+      where: {
+        userId,
+        startAt: {
+          lt: endAt
+        },
+        endAt: {
+          gt: startAt
+        }
+      },
+      select: {
+        id: true
+      }
+    }),
+    prisma.routine.findMany({
+      where: {
+        userId,
+        isActive: true,
+        daysOfWeek: {
+          has: weekday
+        }
+      },
+      select: {
+        id: true,
+        startTime: true,
+        endTime: true
+      },
+      orderBy: [{ startTime: "asc" }, { id: "asc" }]
+    })
+  ]);
+
+  const conflictingRoutine = routines.find((routine) => {
+    const routineStartAt = getUtcInstantForLocalTime(date, routine.startTime, timeZone);
+    const routineEndAt = getUtcInstantForLocalTime(date, routine.endTime, timeZone);
+
+    return routineStartAt.getTime() < endAt.getTime() && routineEndAt.getTime() > startAt.getTime();
+  });
+
+  if (conflictingSchedule || conflictingSuggestion || conflictingCalendarEvent || conflictingRoutine) {
+    throw new AppError(409, "CONFLICT", "Schedule conflicts with an occupied block");
+  }
+}
+
+export async function createTaskSchedule(
+  userId: string,
+  input: CreateTaskScheduleInput
+): Promise<CreateTaskScheduleResult> {
+  const timeZone = await getUserTimeZone(userId);
+  const startAt = getUtcInstantForLocalTime(input.date, input.startTime, timeZone);
+  const endAt = new Date(startAt.getTime() + input.durationMinutes * 60_000);
+  const selectedDateStart = getUtcInstantForLocalTime(input.date, "00:00", timeZone);
+
+  if (endAt.getTime() <= startAt.getTime()) {
+    throw new AppError(400, "VALIDATION_ERROR", "endAt must be after startAt", {
+      field: "durationMinutes"
+    });
+  }
+
+  if (getDateStringForInstantInTimeZone(endAt, timeZone) !== input.date) {
+    throw new AppError(400, "VALIDATION_ERROR", "Scheduled items must end on the selected date", {
+      field: "durationMinutes"
+    });
+  }
+
+  await ensureNoCreateScheduleConflicts(userId, input.date, startAt, endAt, timeZone);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const task = await tx.task.create({
+      data: {
+        userId,
+        title: input.title,
+        status: TaskStatus.SCHEDULED,
+        durationMinutes: input.durationMinutes,
+        priority: Priority.MEDIUM,
+        effortLevel: EffortLevel.MEDIUM,
+        taskType: TaskType.GENERIC,
+        splittable: false
+      }
+    });
+
+    const schedule = await tx.taskSchedule.create({
+      data: {
+        taskId: task.id,
+        userId,
+        startAt,
+        endAt,
+        date: selectedDateStart,
+        isLocked: false,
+        completionStatus: CompletionStatus.PENDING
+      }
+    });
+
+    return {
+      task,
+      schedule
+    };
+  });
+
+  return serializeCreatedTaskSchedule({
+    taskId: result.task.id,
+    taskTitle: result.task.title,
+    scheduleId: result.schedule.id,
+    startAt: result.schedule.startAt,
+    endAt: result.schedule.endAt,
+    date: result.schedule.date
+  });
 }
 
 export async function completeSchedule(
