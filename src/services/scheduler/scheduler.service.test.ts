@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CompletionStatus,
   SuggestionStatus,
@@ -53,6 +53,10 @@ describe("scheduler.service", () => {
     prismaMock.taskSuggestion.updateMany.mockResolvedValue({ count: 1 });
     prismaMock.taskSuggestion.update.mockResolvedValue({});
     prismaMock.taskSchedule.update.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("uses the user timezone for planning day and working hours", async () => {
@@ -117,6 +121,50 @@ describe("scheduler.service", () => {
     expect(result.suggestions).toHaveLength(2);
     expect(result.suggestions.map((suggestion) => suggestion.taskId)).toEqual(["task-1", "task-2"]);
     expect(result.suggestions[0]?.endAt).toBe(result.suggestions[1]?.startAt);
+  });
+
+  it("does not schedule a task into the past for today", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-27T01:45:00.000Z"));
+    prismaMock.task.findMany.mockResolvedValue([
+      {
+        id: "task-1",
+        status: TaskStatus.UNSCHEDULED,
+        deadline: null,
+        durationMinutes: 30,
+        createdAt: new Date("2026-04-20T00:00:00.000Z")
+      }
+    ]);
+    prismaMock.taskSuggestion.create.mockImplementation(createdSuggestionFromData("suggestion-1"));
+
+    const result = await planDay("mock-user", {
+      date: "2026-04-27"
+    });
+
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]?.startAt).toBe("2026-04-27T01:45:00.000Z");
+    expect(result.suggestions[0]?.endAt).toBe("2026-04-27T02:15:00.000Z");
+  });
+
+  it("returns no suggestions when today is already past work hours", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-27T03:30:00.000Z"));
+    prismaMock.task.findMany.mockResolvedValue([
+      {
+        id: "task-1",
+        status: TaskStatus.UNSCHEDULED,
+        deadline: null,
+        durationMinutes: 30,
+        createdAt: new Date("2026-04-20T00:00:00.000Z")
+      }
+    ]);
+
+    const result = await planDay("mock-user", {
+      date: "2026-04-27"
+    });
+
+    expect(result.suggestions).toEqual([]);
+    expect(prismaMock.taskSuggestion.create).not.toHaveBeenCalled();
   });
 
   it("expires stale active suggestions on repeated planDay runs", async () => {
@@ -377,6 +425,49 @@ describe("scheduler.service", () => {
         taskId: "task-1",
         startAt: "2026-04-27T00:30:00.000Z",
         endAt: "2026-04-27T01:00:00.000Z",
+        status: "ACTIVE"
+      }
+    });
+  });
+
+  it("retrySuggestion does not create a replacement in the past for today", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-27T01:45:00.000Z"));
+    prismaMock.taskSuggestion.findFirst
+      .mockResolvedValueOnce({
+        id: "suggestion-1",
+        taskId: "task-1",
+        userId: "mock-user",
+        startAt: new Date("2026-04-27T00:00:00.000Z"),
+        endAt: new Date("2026-04-27T00:30:00.000Z"),
+        date: new Date("2026-04-26T15:00:00.000Z"),
+        status: SuggestionStatus.ACTIVE
+      })
+      .mockResolvedValueOnce(null);
+    prismaMock.task.findFirst.mockResolvedValue({
+      id: "task-1",
+      userId: "mock-user",
+      durationMinutes: 30,
+      deadline: null
+    });
+    prismaMock.taskSuggestion.findMany.mockResolvedValue([]);
+    prismaMock.taskSchedule.findMany.mockResolvedValue([]);
+    prismaMock.calendarEvent.findMany.mockResolvedValue([]);
+    prismaMock.taskSuggestion.create.mockImplementation(async ({ data }) => ({
+      id: "suggestion-2",
+      ...data,
+      generatedAt: new Date("2026-04-26T00:00:00.000Z"),
+      expiresAt: null
+    }));
+
+    const result = await retrySuggestion("mock-user", "suggestion-1");
+
+    expect(result).toEqual({
+      suggestion: {
+        id: "suggestion-2",
+        taskId: "task-1",
+        startAt: "2026-04-27T01:45:00.000Z",
+        endAt: "2026-04-27T02:15:00.000Z",
         status: "ACTIVE"
       }
     });

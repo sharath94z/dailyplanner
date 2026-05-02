@@ -119,6 +119,17 @@ type SchedulerDayData = {
   occupiedBlocks: OccupiedBlock[];
 };
 
+function clampAvailabilityStartForToday(date: string, timeZone: string, availabilityStart: Date) {
+  const now = new Date();
+  const today = getDateStringForInstantInTimeZone(now, timeZone);
+
+  if (date !== today) {
+    return availabilityStart;
+  }
+
+  return now.getTime() > availabilityStart.getTime() ? now : availabilityStart;
+}
+
 function parseTimeParts(value: string, fallback: string): { hours: number; minutes: number } {
   const match = /^(\d{2}):(\d{2})$/.exec(value);
   const fallbackMatch = /^(\d{2}):(\d{2})$/.exec(fallback);
@@ -497,6 +508,7 @@ async function loadSchedulerDayData(
     workDayEnd,
     timeZone
   );
+  const clampedAvailabilityStart = clampAvailabilityStartForToday(date, timeZone, availabilityStart);
   const occupiedBlocks: OccupiedBlock[] = [
     ...routines.map((routine) => ({
       startAt: getUtcInstantForLocalTime(date, routine.startTime, timeZone),
@@ -522,7 +534,7 @@ async function loadSchedulerDayData(
     preferences,
     dayStart: dayWindow.dayStartUtc,
     dayEnd: dayWindow.dayEndUtc,
-    availabilityStart,
+    availabilityStart: clampedAvailabilityStart,
     availabilityEnd,
     occupiedBlocks
   };
@@ -765,6 +777,7 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
   const workDayEnd = normalizeTimeValue(preferences.workDayEnd, DEFAULT_WORKDAY_END);
   const availabilityStart = getUtcInstantForLocalTime(date, workDayStart, timeZone);
   const availabilityEnd = getUtcInstantForLocalTime(date, workDayEnd, timeZone);
+  const clampedAvailabilityStart = clampAvailabilityStartForToday(date, timeZone, availabilityStart);
   const occupiedBlocks: OccupiedBlock[] = [
     ...routines.map((routine) => ({
       startAt: getUtcInstantForLocalTime(date, routine.startTime, timeZone),
@@ -794,7 +807,7 @@ export async function planDay(userId: string, input: PlanDayInput): Promise<Plan
       }
 
       const freeSlots = buildFreeSlots(
-        availabilityStart,
+        clampedAvailabilityStart,
         availabilityEnd,
         mutableOccupiedBlocks
       );
