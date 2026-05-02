@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "code-review": {
+      "source": "coderabbitai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/code-review/SKILL.md",
+      "computedHash": "6eef6ded8c90f0c76764e76f12d06b4d873525ee4b401972e359b5920d1d6d4e"
+    },
     "supabase": {
       "source": "supabase/agent-skills",
       "sourceType": "github",

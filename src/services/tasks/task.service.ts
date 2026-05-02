@@ -86,6 +86,11 @@ export type TaskListResult = {
   nextCursor: string | null;
 };
 
+export type TaskAggregateResult = {
+  openTaskCount: number;
+  unscheduledDurationMinutes: number;
+};
+
 function toIso(value: Date | string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -192,6 +197,35 @@ export async function createTask(userId: string, input: TaskCreateInput) {
 
   return {
     task: serializeTask(task)
+  };
+}
+
+export async function getTaskAggregates(userId: string): Promise<TaskAggregateResult> {
+  const [openTaskCount, unscheduledDuration] = await Promise.all([
+    prisma.task.count({
+      where: {
+        userId,
+        status: {
+          notIn: [TaskStatus.COMPLETED, TaskStatus.ARCHIVED]
+        }
+      }
+    }),
+    prisma.task.aggregate({
+      where: {
+        userId,
+        status: {
+          in: [TaskStatus.UNSCHEDULED, TaskStatus.MISSED]
+        }
+      },
+      _sum: {
+        durationMinutes: true
+      }
+    })
+  ]);
+
+  return {
+    openTaskCount,
+    unscheduledDurationMinutes: unscheduledDuration._sum.durationMinutes ?? 0
   };
 }
 

@@ -17,6 +17,9 @@ export const prismaMock = {
     create: mockFn()
   },
   task: {
+    aggregate: mockFn(),
+    count: mockFn(),
+    create: mockFn(),
     findMany: mockFn(),
     findFirst: mockFn(),
     update: mockFn(),
