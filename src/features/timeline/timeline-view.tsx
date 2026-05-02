@@ -13,7 +13,7 @@ import {
   dismissSuggestion,
   retrySuggestion
 } from "../../lib/client-api/suggestions";
-import { getUtcInstantForLocalTime } from "../../lib/planner-time";
+import { getDayWindowForDate, getUtcInstantForLocalTime } from "../../lib/planner-time";
 import type { TimelineItem, TimelineResult } from "./types";
 
 const PAGE_CONTAINER_STYLE = {
@@ -92,6 +92,27 @@ function getMinutesIntoDay(instant: string, timeZone: string): number {
   return hour * MINUTES_PER_HOUR + minute;
 }
 
+function getClampedItemBounds(
+  item: TimelineItem,
+  dayStartUtc: Date,
+  dayEndUtc: Date,
+  timeZone: string
+) {
+  const rawStartAt = new Date(item.startAt);
+  const rawEndAt = new Date(item.endAt);
+  const startAt =
+    rawStartAt.getTime() < dayStartUtc.getTime() ? dayStartUtc : rawStartAt;
+  const endAt =
+    rawEndAt.getTime() > dayEndUtc.getTime() ? dayEndUtc : rawEndAt;
+
+  return {
+    startAt,
+    endAt,
+    startMinutes: getMinutesIntoDay(startAt.toISOString(), timeZone),
+    endMinutes: getMinutesIntoDay(endAt.toISOString(), timeZone)
+  };
+}
+
 function formatHourLabel(hour: number) {
   const normalizedInput = hour % 24;
   const suffix = normalizedInput >= 12 ? "PM" : "AM";
@@ -118,7 +139,12 @@ function formatMinutesCompact(totalMinutes: number) {
   return `${hours}h ${minutes}m`;
 }
 
-function getTimelineWindow(items: TimelineItem[], timeZone: string) {
+function getTimelineWindow(
+  items: TimelineItem[],
+  dayStartUtc: Date,
+  dayEndUtc: Date,
+  timeZone: string
+) {
   if (items.length === 0) {
     return {
       startHour: DEFAULT_DAY_START_HOUR,
@@ -126,11 +152,14 @@ function getTimelineWindow(items: TimelineItem[], timeZone: string) {
     };
   }
 
-  const itemStarts = items.map((item) =>
-    Math.floor(getMinutesIntoDay(item.startAt, timeZone) / MINUTES_PER_HOUR)
+  const itemBounds = items.map((item) =>
+    getClampedItemBounds(item, dayStartUtc, dayEndUtc, timeZone)
   );
-  const itemEnds = items.map((item) =>
-    Math.ceil(getMinutesIntoDay(item.endAt, timeZone) / MINUTES_PER_HOUR)
+  const itemStarts = itemBounds.map((bounds) =>
+    Math.floor(bounds.startMinutes / MINUTES_PER_HOUR)
+  );
+  const itemEnds = itemBounds.map((bounds) =>
+    Math.ceil(bounds.endMinutes / MINUTES_PER_HOUR)
   );
 
   const startHour = Math.max(0, Math.min(DEFAULT_DAY_START_HOUR, ...itemStarts));
@@ -146,9 +175,19 @@ function hasInteractiveControls(item: TimelineItem) {
   return item.type === "task_suggestion" || (item.type === "task_schedule" && item.state === "PENDING");
 }
 
-function getRenderedBlockMetrics(item: TimelineItem, timeZone: string, windowStartMinutes: number) {
-  const startMinutes = getMinutesIntoDay(item.startAt, timeZone);
-  const endMinutes = getMinutesIntoDay(item.endAt, timeZone);
+function getRenderedBlockMetrics(
+  item: TimelineItem,
+  dayStartUtc: Date,
+  dayEndUtc: Date,
+  timeZone: string,
+  windowStartMinutes: number
+) {
+  const { startMinutes, endMinutes } = getClampedItemBounds(
+    item,
+    dayStartUtc,
+    dayEndUtc,
+    timeZone
+  );
   const durationMinutes = Math.max(15, endMinutes - startMinutes);
   const top = ((startMinutes - windowStartMinutes) / MINUTES_PER_HOUR) * PIXELS_PER_HOUR;
   const visualHeight = Math.max(
@@ -158,7 +197,8 @@ function getRenderedBlockMetrics(item: TimelineItem, timeZone: string, windowSta
 
   return {
     top,
-    visualHeight
+    visualHeight,
+    visualBottom: top + visualHeight
   };
 }
 
@@ -168,15 +208,23 @@ type TimelineItemLayout = {
   laneIndex: number;
 };
 
-function getTimelineItemLayouts(items: TimelineItem[], timeZone: string): TimelineItemLayout[] {
+function getTimelineItemLayouts(
+  items: TimelineItem[],
+  dayStartUtc: Date,
+  dayEndUtc: Date,
+  timeZone: string,
+  windowStartMinutes: number
+) {
   const sortedItems = [...items].sort((left, right) => {
-    const startDiff = new Date(left.startAt).getTime() - new Date(right.startAt).getTime();
+    const leftBounds = getClampedItemBounds(left, dayStartUtc, dayEndUtc, timeZone);
+    const rightBounds = getClampedItemBounds(right, dayStartUtc, dayEndUtc, timeZone);
+    const startDiff = leftBounds.startAt.getTime() - rightBounds.startAt.getTime();
 
     if (startDiff !== 0) {
       return startDiff;
     }
 
-    return new Date(left.endAt).getTime() - new Date(right.endAt).getTime();
+    return leftBounds.endAt.getTime() - rightBounds.endAt.getTime();
   });
 
   const layouts: TimelineItemLayout[] = [];
@@ -192,15 +240,20 @@ function getTimelineItemLayouts(items: TimelineItem[], timeZone: string): Timeli
     const groupedLayouts: TimelineItemLayout[] = [];
 
     for (const item of group) {
-      const startAt = new Date(item.startAt).getTime();
-      const endAt = new Date(item.endAt).getTime();
-      let laneIndex = laneEnds.findIndex((laneEnd) => laneEnd <= startAt);
+      const metrics = getRenderedBlockMetrics(
+        item,
+        dayStartUtc,
+        dayEndUtc,
+        timeZone,
+        windowStartMinutes
+      );
+      let laneIndex = laneEnds.findIndex((laneEnd) => laneEnd <= metrics.top);
 
       if (laneIndex === -1) {
         laneIndex = laneEnds.length;
-        laneEnds.push(endAt);
+        laneEnds.push(metrics.visualBottom);
       } else {
-        laneEnds[laneIndex] = endAt;
+        laneEnds[laneIndex] = metrics.visualBottom;
       }
 
       groupedLayouts.push({
@@ -224,24 +277,29 @@ function getTimelineItemLayouts(items: TimelineItem[], timeZone: string): Timeli
   }
 
   for (const item of sortedItems) {
-    const itemStart = new Date(item.startAt).getTime();
-    const itemEnd = new Date(item.endAt).getTime();
+    const metrics = getRenderedBlockMetrics(
+      item,
+      dayStartUtc,
+      dayEndUtc,
+      timeZone,
+      windowStartMinutes
+    );
 
     if (group.length === 0) {
       group = [item];
-      groupEnd = itemEnd;
+      groupEnd = metrics.visualBottom;
       continue;
     }
 
-    if (itemStart < groupEnd) {
+    if (metrics.top < groupEnd) {
       group.push(item);
-      groupEnd = Math.max(groupEnd, itemEnd);
+      groupEnd = Math.max(groupEnd, metrics.visualBottom);
       continue;
     }
 
     flushGroup();
     group = [item];
-    groupEnd = itemEnd;
+    groupEnd = metrics.visualBottom;
   }
 
   flushGroup();
@@ -382,14 +440,26 @@ export function TimelineView({
   const [pendingAction, setPendingAction] = useState<ItemAction>(null);
   const [errorByItemKey, setErrorByItemKey] = useState<Record<string, string>>({});
   const [, startTransition] = useTransition();
-  const timelineWindow = getTimelineWindow(timeline.items, timeZone);
-  const timelineLayouts = getTimelineItemLayouts(timeline.items, timeZone);
+  const selectedDayWindow = getDayWindowForDate(timeline.date, timeZone);
+  const timelineWindow = getTimelineWindow(
+    timeline.items,
+    selectedDayWindow.dayStartUtc,
+    selectedDayWindow.dayEndUtc,
+    timeZone
+  );
   const railHours = Array.from(
     { length: timelineWindow.endHour - timelineWindow.startHour + 1 },
     (_, index) => timelineWindow.startHour + index
   );
   const windowStartMinutes = timelineWindow.startHour * MINUTES_PER_HOUR;
   const timelineHeight = (timelineWindow.endHour - timelineWindow.startHour) * PIXELS_PER_HOUR;
+  const timelineLayouts = getTimelineItemLayouts(
+    timeline.items,
+    selectedDayWindow.dayStartUtc,
+    selectedDayWindow.dayEndUtc,
+    timeZone,
+    windowStartMinutes
+  );
 
   async function handleSuggestionAction(
     item: TimelineItem,
@@ -693,7 +763,13 @@ export function TimelineView({
                     item.state === "PENDING" &&
                     Boolean(item.scheduleId);
                   const itemError = errorByItemKey[itemKey];
-                  const metrics = getRenderedBlockMetrics(item, timeZone, windowStartMinutes);
+                  const metrics = getRenderedBlockMetrics(
+                    item,
+                    selectedDayWindow.dayStartUtc,
+                    selectedDayWindow.dayEndUtc,
+                    timeZone,
+                    windowStartMinutes
+                  );
                   const laneGapPx = laneCount > 1 ? 8 : 0;
                   const laneWidthPercent = 100 / laneCount;
 
