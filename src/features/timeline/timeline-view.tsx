@@ -14,7 +14,6 @@ import {
   retrySuggestion
 } from "../../lib/client-api/suggestions";
 import { getUtcInstantForLocalTime } from "../../lib/planner-time";
-import type { SerializedTask } from "../../services/tasks/task.service";
 import type { TimelineItem, TimelineResult } from "./types";
 
 const PAGE_CONTAINER_STYLE = {
@@ -49,10 +48,11 @@ const PIXELS_PER_HOUR = 76;
 
 type TimelineViewProps = {
   timeline: TimelineResult;
-  tasks: SerializedTask[];
   mockUserId: string;
+  openTaskCount: number;
   selectedDate: string;
   timeZone: string;
+  unscheduledDurationMinutes: number;
 };
 
 type ItemAction = "accept" | "retry" | "dismiss" | "complete" | null;
@@ -93,8 +93,9 @@ function getMinutesIntoDay(instant: string, timeZone: string): number {
 }
 
 function formatHourLabel(hour: number) {
-  const suffix = hour >= 12 ? "PM" : "AM";
-  const normalizedHour = hour % 12 === 0 ? 12 : hour % 12;
+  const normalizedInput = hour % 24;
+  const suffix = normalizedInput >= 12 ? "PM" : "AM";
+  const normalizedHour = normalizedInput % 12 === 0 ? 12 : normalizedInput % 12;
   return `${normalizedHour} ${suffix}`;
 }
 
@@ -159,6 +160,107 @@ function getRenderedBlockMetrics(item: TimelineItem, timeZone: string, windowSta
     top,
     visualHeight
   };
+}
+
+type TimelineItemLayout = {
+  item: TimelineItem;
+  laneCount: number;
+  laneIndex: number;
+};
+
+function getTimelineItemLayouts(items: TimelineItem[], timeZone: string): TimelineItemLayout[] {
+  const sortedItems = [...items].sort((left, right) => {
+    const startDiff = new Date(left.startAt).getTime() - new Date(right.startAt).getTime();
+
+    if (startDiff !== 0) {
+      return startDiff;
+    }
+
+    return new Date(left.endAt).getTime() - new Date(right.endAt).getTime();
+  });
+
+  const layouts: TimelineItemLayout[] = [];
+  let group: TimelineItem[] = [];
+  let groupEnd = 0;
+
+  function flushGroup() {
+    if (group.length === 0) {
+      return;
+    }
+
+    const laneEnds: number[] = [];
+    const groupedLayouts: TimelineItemLayout[] = [];
+
+    for (const item of group) {
+      const startAt = new Date(item.startAt).getTime();
+      const endAt = new Date(item.endAt).getTime();
+      let laneIndex = laneEnds.findIndex((laneEnd) => laneEnd <= startAt);
+
+      if (laneIndex === -1) {
+        laneIndex = laneEnds.length;
+        laneEnds.push(endAt);
+      } else {
+        laneEnds[laneIndex] = endAt;
+      }
+
+      groupedLayouts.push({
+        item,
+        laneIndex,
+        laneCount: 0
+      });
+    }
+
+    const laneCount = Math.max(1, laneEnds.length);
+
+    for (const layout of groupedLayouts) {
+      layouts.push({
+        ...layout,
+        laneCount
+      });
+    }
+
+    group = [];
+    groupEnd = 0;
+  }
+
+  for (const item of sortedItems) {
+    const itemStart = new Date(item.startAt).getTime();
+    const itemEnd = new Date(item.endAt).getTime();
+
+    if (group.length === 0) {
+      group = [item];
+      groupEnd = itemEnd;
+      continue;
+    }
+
+    if (itemStart < groupEnd) {
+      group.push(item);
+      groupEnd = Math.max(groupEnd, itemEnd);
+      continue;
+    }
+
+    flushGroup();
+    group = [item];
+    groupEnd = itemEnd;
+  }
+
+  flushGroup();
+
+  const layoutMap = new Map(layouts.map((layout) => [`${layout.item.type}-${layout.item.id}`, layout]));
+
+  return items.map((item) => {
+    const layout = layoutMap.get(`${item.type}-${item.id}`);
+
+    if (!layout) {
+      return {
+        item,
+        laneCount: 1,
+        laneIndex: 0
+      };
+    }
+
+    return layout;
+  });
 }
 
 function getItemAccent(item: TimelineItem) {
@@ -269,21 +371,19 @@ function getPendingLabel(action: Exclude<ItemAction, null>) {
 
 export function TimelineView({
   timeline,
-  tasks,
   mockUserId,
+  openTaskCount,
   selectedDate,
-  timeZone
+  timeZone,
+  unscheduledDurationMinutes
 }: TimelineViewProps) {
   const router = useRouter();
   const [pendingItemKey, setPendingItemKey] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<ItemAction>(null);
   const [errorByItemKey, setErrorByItemKey] = useState<Record<string, string>>({});
   const [, startTransition] = useTransition();
-  const openTasks = tasks.filter((task) => task.status !== "COMPLETED" && task.status !== "ARCHIVED");
-  const unscheduledDurationMinutes = tasks
-    .filter((task) => task.status === "UNSCHEDULED" || task.status === "MISSED")
-    .reduce((total, task) => total + (task.durationMinutes ?? 0), 0);
   const timelineWindow = getTimelineWindow(timeline.items, timeZone);
+  const timelineLayouts = getTimelineItemLayouts(timeline.items, timeZone);
   const railHours = Array.from(
     { length: timelineWindow.endHour - timelineWindow.startHour + 1 },
     (_, index) => timelineWindow.startHour + index
@@ -421,7 +521,7 @@ export function TimelineView({
               }}
             >
               <span>
-                {openTasks.length} open task{openTasks.length === 1 ? "" : "s"} ·{" "}
+                {openTaskCount} open task{openTaskCount === 1 ? "" : "s"} ·{" "}
                 {formatMinutesCompact(unscheduledDurationMinutes)} unscheduled
               </span>
               <Link
@@ -582,7 +682,7 @@ export function TimelineView({
               ))}
 
               <div style={{ position: "relative", height: `${timelineHeight}px`, padding: "0.65rem" }}>
-                {timeline.items.map((item) => {
+                {timelineLayouts.map(({ item, laneCount, laneIndex }) => {
                   const accent = getItemAccent(item);
                   const itemKey =
                     item.type === "task_suggestion" ? item.suggestionId ?? item.id : item.scheduleId ?? item.id;
@@ -594,6 +694,8 @@ export function TimelineView({
                     Boolean(item.scheduleId);
                   const itemError = errorByItemKey[itemKey];
                   const metrics = getRenderedBlockMetrics(item, timeZone, windowStartMinutes);
+                  const laneGapPx = laneCount > 1 ? 8 : 0;
+                  const laneWidthPercent = 100 / laneCount;
 
                   return (
                     <article
@@ -601,14 +703,15 @@ export function TimelineView({
                       style={{
                         position: "absolute",
                         top: `${metrics.top}px`,
-                        left: "0.65rem",
-                        right: "0.65rem",
+                        left: `calc(${laneWidthPercent * laneIndex}% + ${laneGapPx / 2}px)`,
+                        width: `calc(${laneWidthPercent}% - ${laneGapPx}px)`,
                         minHeight: `${metrics.visualHeight}px`,
                         border: accent.border,
                         backgroundColor: accent.backgroundColor,
                         color: accent.color,
                         borderRadius: "1rem",
                         padding: "0.85rem 0.9rem",
+                        zIndex: laneIndex + 1,
                         boxShadow:
                           item.type === "task_schedule" && item.state === "PENDING"
                             ? "0 16px 30px rgba(15, 23, 42, 0.16)"

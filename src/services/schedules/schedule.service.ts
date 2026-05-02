@@ -3,6 +3,7 @@ import "server-only";
 import {
   CompletionStatus,
   EffortLevel,
+  Prisma,
   Priority,
   SuggestionStatus,
   TaskStatus,
@@ -119,6 +120,7 @@ function serializeCreatedTaskSchedule(input: {
 }
 
 async function ensureNoCreateScheduleConflicts(
+  db: Prisma.TransactionClient,
   userId: string,
   date: string,
   startAt: Date,
@@ -128,7 +130,7 @@ async function ensureNoCreateScheduleConflicts(
   const weekday = getWeekdayFromDateString(date);
 
   const [conflictingSchedule, conflictingSuggestion, conflictingCalendarEvent, routines] = await Promise.all([
-    prisma.taskSchedule.findFirst({
+    db.taskSchedule.findFirst({
       where: {
         userId,
         startAt: {
@@ -142,7 +144,7 @@ async function ensureNoCreateScheduleConflicts(
         id: true
       }
     }),
-    prisma.taskSuggestion.findFirst({
+    db.taskSuggestion.findFirst({
       where: {
         userId,
         status: SuggestionStatus.ACTIVE,
@@ -157,7 +159,7 @@ async function ensureNoCreateScheduleConflicts(
         id: true
       }
     }),
-    prisma.calendarEvent.findFirst({
+    db.calendarEvent.findFirst({
       where: {
         userId,
         startAt: {
@@ -171,7 +173,7 @@ async function ensureNoCreateScheduleConflicts(
         id: true
       }
     }),
-    prisma.routine.findMany({
+    db.routine.findMany({
       where: {
         userId,
         isActive: true,
@@ -221,9 +223,9 @@ export async function createTaskSchedule(
     });
   }
 
-  await ensureNoCreateScheduleConflicts(userId, input.date, startAt, endAt, timeZone);
-
   const result = await prisma.$transaction(async (tx) => {
+    await ensureNoCreateScheduleConflicts(tx, userId, input.date, startAt, endAt, timeZone);
+
     const task = await tx.task.create({
       data: {
         userId,
