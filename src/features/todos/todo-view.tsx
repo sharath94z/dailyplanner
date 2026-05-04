@@ -15,16 +15,11 @@ type TodoViewProps = {
 const PAGE_CONTAINER_STYLE = {
   margin: "0 auto",
   maxWidth: "42rem",
-  padding: "1rem 0.9rem 6rem",
+  minHeight: "100vh",
+  padding: "1.1rem 0.95rem 9rem",
   fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  color: "#0f172a"
-} as const
-
-const SURFACE_STYLE = {
-  border: "1px solid #e7e5e4",
-  borderRadius: "1.35rem",
-  backgroundColor: "#ffffff",
-  boxShadow: "0 18px 45px rgba(15, 23, 42, 0.06)"
+  color: "#111827",
+  backgroundColor: "#f7f3ef"
 } as const
 
 const PRIORITY_ORDER: Record<Priority, number> = {
@@ -88,9 +83,9 @@ function priorityTint(priority: Priority, muted: boolean) {
 
   if (priority === "HIGH") {
     return {
-      backgroundColor: "#fef2f2",
-      color: "#b91c1c",
-      border: "1px solid #fecaca"
+      backgroundColor: "#fff1f2",
+      color: "#be123c",
+      border: "1px solid #fecdd3"
     }
   }
 
@@ -116,10 +111,10 @@ function metaPill(children: ReactNode, tint?: CSSProperties) {
         display: "inline-flex",
         alignItems: "center",
         borderRadius: "999px",
-        padding: "0.24rem 0.58rem",
-        fontSize: "0.73rem",
+        padding: "0.26rem 0.62rem",
+        fontSize: "0.74rem",
         fontWeight: 700,
-        letterSpacing: "0.03em",
+        letterSpacing: "0.02em",
         ...tint
       }}
     >
@@ -134,30 +129,32 @@ export function TodoView({ tasks, mockUserId, selectedDate }: TodoViewProps) {
 
   return (
     <main style={PAGE_CONTAINER_STYLE}>
-      <section
-        style={{
-          ...SURFACE_STYLE,
-          padding: "1rem",
-          marginBottom: "1rem",
-          background:
-            "linear-gradient(180deg, rgba(255,251,235,0.98) 0%, rgba(255,255,255,1) 100%)"
-        }}
-      >
+      <section style={{ marginBottom: "1rem" }}>
         <p
           style={{
             margin: 0,
-            fontSize: "0.72rem",
+            fontSize: "0.78rem",
             fontWeight: 700,
             letterSpacing: "0.08em",
             textTransform: "uppercase",
-            color: "#9a3412"
+            color: "#d9485f"
           }}
         >
-          Task management
+          Todo
         </p>
-        <h1 style={{ margin: "0.35rem 0 0", fontSize: "1.8rem", lineHeight: 1.05 }}>Todo</h1>
-        <p style={{ margin: "0.45rem 0 0", fontSize: "0.92rem", color: "#57534e" }}>
-          Capture what needs doing, then move to Timeline when it has a time.
+        <h1
+          style={{
+            margin: "0.35rem 0 0",
+            fontSize: "2.1rem",
+            lineHeight: 1.04,
+            letterSpacing: "-0.03em",
+            color: "#111827"
+          }}
+        >
+          Todo
+        </h1>
+        <p style={{ margin: "0.35rem 0 0", fontSize: "0.92rem", color: "#78716c" }}>
+          Add tasks here, then schedule them on your timeline.
         </p>
       </section>
 
@@ -165,160 +162,137 @@ export function TodoView({ tasks, mockUserId, selectedDate }: TodoViewProps) {
         <TaskCreateForm mockUserId={mockUserId} />
       </div>
 
-      <section
-        style={{
-          ...SURFACE_STYLE,
-          padding: "1rem"
-        }}
-      >
-        <div
+      {sortedTasks.length === 0 ? (
+        <section
           style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "0.8rem",
-            marginBottom: "0.95rem"
+            border: "1px dashed #ddd6ce",
+            borderRadius: "1.3rem",
+            padding: "1.1rem",
+            backgroundColor: "#fffdfb",
+            color: "#57534e",
+            fontSize: "0.95rem"
           }}
         >
-          <div>
-            <h2 style={{ margin: 0, fontSize: "1rem" }}>All tasks</h2>
-            <p style={{ margin: "0.25rem 0 0", fontSize: "0.84rem", color: "#6b7280" }}>
-              Incomplete tasks stay on top. Completed tasks remain visible at the bottom.
-            </p>
-          </div>
-          <span
-            style={{
-              borderRadius: "999px",
-              border: "1px solid #e7e5e4",
-              backgroundColor: "#fafaf9",
-              padding: "0.3rem 0.65rem",
-              fontSize: "0.8rem",
-              color: "#57534e"
-            }}
-          >
-            {sortedTasks.length}
-          </span>
-        </div>
+          <div style={{ fontWeight: 700, color: "#111827" }}>No tasks yet</div>
+          <div style={{ marginTop: "0.3rem" }}>Add tasks here, then schedule them on your timeline.</div>
+        </section>
+      ) : (
+        <section style={{ display: "grid", gap: "0.8rem" }}>
+          {sortedTasks.map((task) => {
+            const completed = isCompletedTask(task)
+            const tint = priorityTint(task.priority, completed)
 
-        {sortedTasks.length === 0 ? (
-          <div
-            style={{
-              border: "1px dashed #d6d3d1",
-              borderRadius: "1rem",
-              padding: "1rem",
-              backgroundColor: "#fafaf9",
-              color: "#57534e",
-              fontSize: "0.94rem"
-            }}
-          >
-            No tasks yet. Add something here, then plan it when you want time on the calendar.
-          </div>
-        ) : (
-          <div style={{ display: "grid", gap: "0.75rem" }}>
-            {sortedTasks.map((task) => {
-              const completed = isCompletedTask(task)
-              const tint = priorityTint(task.priority, completed)
-
-              return (
-                <article
-                  key={task.id}
+            return (
+              <article
+                key={task.id}
+                style={{
+                  border: "1px solid #ece7e1",
+                  borderRadius: "1.35rem",
+                  padding: "0.95rem",
+                  backgroundColor: "#fffdfb",
+                  boxShadow: "0 10px 22px rgba(15, 23, 42, 0.04)",
+                  opacity: completed ? 0.62 : 1
+                }}
+              >
+                <div
                   style={{
-                    border: "1px solid #ece7e1",
-                    borderRadius: "1rem",
-                    padding: "0.9rem",
-                    backgroundColor: completed ? "#fafaf9" : "#fffefc",
-                    opacity: completed ? 0.64 : 1
+                    display: "grid",
+                    gridTemplateColumns: "2.1rem 1fr",
+                    gap: "0.8rem",
+                    alignItems: "start"
                   }}
                 >
                   <div
                     style={{
-                      display: "grid",
-                      gridTemplateColumns: "1.4rem 1fr",
-                      gap: "0.75rem",
-                      alignItems: "start"
+                      width: "2.1rem",
+                      height: "2.1rem",
+                      borderRadius: "999px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: completed ? "#f5f5f4" : "#fff1f2",
+                      border: completed ? "1px solid #e7e5e4" : "1px solid #fecdd3",
+                      color: completed ? "#78716c" : "#d9485f",
+                      fontSize: "0.8rem",
+                      fontWeight: 800,
+                      marginTop: "0.12rem"
                     }}
+                    aria-hidden="true"
                   >
-                    <input
-                      type="checkbox"
-                      checked={completed}
-                      disabled
-                      aria-label={completed ? "Completed task" : "Incomplete task"}
+                    {completed ? "v" : "+"}
+                  </div>
+
+                  <div style={{ minWidth: 0 }}>
+                    <div
                       style={{
-                        marginTop: "0.18rem",
-                        width: "1rem",
-                        height: "1rem",
-                        accentColor: "#0f766e"
+                        display: "flex",
+                        alignItems: "flex-start",
+                        justifyContent: "space-between",
+                        gap: "0.75rem"
                       }}
-                    />
-
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          justifyContent: "space-between",
-                          gap: "0.75rem"
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div
-                            style={{
-                              fontSize: "1rem",
-                              fontWeight: 700,
-                              lineHeight: 1.25,
-                              textDecoration: completed ? "line-through" : "none",
-                              color: completed ? "#78716c" : "#111827",
-                              wordBreak: "break-word"
-                            }}
-                          >
-                            {task.title}
-                          </div>
-                          <div
-                            style={{
-                              display: "flex",
-                              flexWrap: "wrap",
-                              gap: "0.45rem",
-                              marginTop: "0.65rem"
-                            }}
-                          >
-                            {metaPill(task.priority, tint)}
-                            {task.deadline ? metaPill(`Due ${formatDueDate(task.deadline)}`, {
-                              backgroundColor: completed ? "#f5f5f4" : "#f8fafc",
-                              color: completed ? "#78716c" : "#475569",
-                              border: completed ? "1px solid #e7e5e4" : "1px solid #dbeafe"
-                            }) : null}
-                            {task.durationMinutes ? metaPill(`${task.durationMinutes}m`, {
-                              backgroundColor: completed ? "#f5f5f4" : "#f8fafc",
-                              color: completed ? "#78716c" : "#475569",
-                              border: completed ? "1px solid #e7e5e4" : "1px solid #e2e8f0"
-                            }) : null}
-                          </div>
-                        </div>
-
-                        <span
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div
                           style={{
-                            flexShrink: 0,
-                            borderRadius: "999px",
-                            backgroundColor: completed ? "#f5f5f4" : "#f8fafc",
-                            border: "1px solid #e2e8f0",
-                            padding: "0.22rem 0.55rem",
-                            fontSize: "0.72rem",
-                            color: completed ? "#78716c" : "#64748b",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.04em"
+                            fontSize: "1rem",
+                            fontWeight: 700,
+                            lineHeight: 1.28,
+                            textDecoration: completed ? "line-through" : "none",
+                            color: completed ? "#78716c" : "#111827",
+                            wordBreak: "break-word"
                           }}
                         >
-                          {task.status}
-                        </span>
+                          {task.title}
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "0.45rem",
+                            marginTop: "0.68rem"
+                          }}
+                        >
+                          {metaPill(task.priority, tint)}
+                          {task.deadline
+                            ? metaPill(`Due ${formatDueDate(task.deadline)}`, {
+                                backgroundColor: completed ? "#f5f5f4" : "#faf7f3",
+                                color: completed ? "#78716c" : "#57534e",
+                                border: "1px solid #ece7e1"
+                              })
+                            : null}
+                          {task.durationMinutes
+                            ? metaPill(`${task.durationMinutes}m`, {
+                                backgroundColor: completed ? "#f5f5f4" : "#faf7f3",
+                                color: completed ? "#78716c" : "#57534e",
+                                border: "1px solid #ece7e1"
+                              })
+                            : null}
+                        </div>
                       </div>
+
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          borderRadius: "999px",
+                          backgroundColor: completed ? "#f5f5f4" : "#ffffff",
+                          border: "1px solid #ece7e1",
+                          padding: "0.22rem 0.55rem",
+                          fontSize: "0.7rem",
+                          color: completed ? "#78716c" : "#78716c",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.04em"
+                        }}
+                      >
+                        {task.status}
+                      </span>
                     </div>
                   </div>
-                </article>
-              )
-            })}
-          </div>
-        )}
-      </section>
+                </div>
+              </article>
+            )
+          })}
+        </section>
+      )}
 
       <AppNav selectedDate={selectedDate} />
     </main>
